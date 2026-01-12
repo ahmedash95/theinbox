@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm run tauri:*)",
+      "Bash(pnpm tauri dev:*)",
+      "Bash(pnpm tauri build:*)",
+      "Bash(npm run build:*)",
+      "Bash(cargo build:*)",
+      "Bash(git push:*)",
+      "Bash(grep:*)",
+      "WebSearch",
+      "WebFetch(domain:v2.tauri.app)",
+      "Bash(pnpm vue-tsc:*)",
+      "Bash(git tag:*)",
+      "Bash(for:*)",
+      "Bash(do gh release delete \"v$v\" -y)",
+      "Bash(done)"
+    ]
+  }
+}

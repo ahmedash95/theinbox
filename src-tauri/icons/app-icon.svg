@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <!-- Gradient for the background -->
+    <linearGradient id="bgGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#6366F1"/>
+      <stop offset="50%" style="stop-color:#8B5CF6"/>
+      <stop offset="100%" style="stop-color:#A855F7"/>
+    </linearGradient>
+    
+    <!-- Gradient for the envelope -->
+    <linearGradient id="envelopeGradient" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#FFFFFF"/>
+      <stop offset="100%" style="stop-color:#F1F5F9"/>
+    </linearGradient>
+    
+    <!-- Shadow filter -->
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="8" stdDeviation="20" flood-color="#000000" flood-opacity="0.25"/>
+    </filter>
+    
+    <!-- Inner shadow for envelope -->
+    <filter id="innerShadow" x="-50%" y="-50%" width="200%" height="200%">
+      <feDropShadow dx="0" dy="4" stdDeviation="8" flood-color="#000000" flood-opacity="0.1"/>
+    </filter>
+  </defs>
+  
+  <!-- Background rounded square (macOS style) -->
+  <rect x="64" y="64" width="896" height="896" rx="200" ry="200" fill="url(#bgGradient)"/>
+  
+  <!-- Subtle inner highlight -->
+  <rect x="64" y="64" width="896" height="448" rx="200" ry="200" fill="white" opacity="0.1"/>
+  
+  <!-- Envelope body -->
+  <g filter="url(#shadow)">
+    <rect x="180" y="320" width="500" height="380" rx="40" ry="40" fill="url(#envelopeGradient)"/>
+    
+    <!-- Envelope flap -->
+    <path d="M180 360 L430 520 L680 360" fill="none" stroke="#E2E8F0" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+    
+    <!-- Envelope fold line -->
+    <path d="M180 360 Q430 560 680 360" fill="#F8FAFC" stroke="#E2E8F0" stroke-width="3"/>
+    
+    <!-- Email lines (content preview) -->
+    <rect x="230" y="540" width="300" height="20" rx="10" fill="#CBD5E1"/>
+    <rect x="230" y="590" width="220" height="20" rx="10" fill="#E2E8F0"/>
+    <rect x="230" y="640" width="260" height="20" rx="10" fill="#E2E8F0"/>
+  </g>
+  
+  <!-- Checkmark badge -->
+  <g filter="url(#shadow)">
+    <circle cx="720" cy="620" r="140" fill="#10B981"/>
+    <circle cx="720" cy="620" r="140" fill="url(#bgGradient)" opacity="0"/>
+    
+    <!-- White checkmark -->
+    <path d="M640 620 L695 680 L800 560" fill="none" stroke="white" stroke-width="40" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+  
+  <!-- Sparkles -->
+  <g fill="#FCD34D">
+    <!-- Top right sparkle -->
+    <path d="M820 200 L830 230 L860 240 L830 250 L820 280 L810 250 L780 240 L810 230 Z" opacity="0.9"/>
+    
+    <!-- Small sparkle -->
+    <circle cx="750" cy="180" r="12" opacity="0.7"/>
+    <circle cx="880" cy="280" r="8" opacity="0.6"/>
+  </g>
+</svg>
