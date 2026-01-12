@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "inboxcleanup",
+  "productName": "InboxCleanup",
   "version": "0.1.0",
   "identifier": "com.ahmedash95.inboxcleanup",
   "build": {
@@ -10,11 +10,19 @@
     "frontendDist": "../dist"
   },
   "app": {
+    "macOSPrivateApi": true,
     "windows": [
       {
-        "title": "inboxcleanup",
-        "width": 800,
-        "height": 600
+        "title": "InboxCleanup",
+        "width": 960,
+        "height": 680,
+        "minWidth": 720,
+        "minHeight": 480,
+        "transparent": true,
+        "decorations": true,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "dragDropEnabled": true
       }
     ],
     "security": {
