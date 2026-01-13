@@ -1,8 +1,8 @@
 # Migration Strategy: High-Performance Email Access
 
-**Objective:** Deprecate slow, UI-dependent methods (AppleScript) and complex authentication flows (OAuth 2.0) in favor of direct socket connections and raw database reads.
+**Objective:** Avoid UI-dependent methods and complex OAuth flows by using direct IMAP connections with app passwords.
 
-**Target Systems:** Gmail (Remote), Apple Mail (Local macOS).
+**Target Systems:** Gmail (Remote IMAP only).
 
 ---
 
@@ -64,75 +64,6 @@ def execute_batch_mark_read(username, app_password):
 
 ---
 
-## 3. Local Access: Apple Mail Direct DB Read
+## 3. Scope Note
 
-**Status:** `Active` (Replaces AppleScript)
-**Motivation:** AppleScript interacts with the UI layer (slow/blocking). Direct SQLite access is instant and non-blocking.
-
-* **Data Source:** `~/Library/Mail/V[X]/MailData/Envelope Index`
-* *Note:* `V[X]` varies by OS (Monterey=V9, Ventura=V10, Sonoma=V10/V11).
-
-
-* **Format:** SQLite3.
-* **Permissions:** Requires **Full Disk Access** for the executing terminal/agent.
-
-### Schema Mapping
-
-| AppleScript Concept | SQLite Table/Column |
-| --- | --- |
-| `message` | `messages` table |
-| `subject` | `messages.subject` (often normalized) |
-| `sender` | `addresses` table (joined via `sender_address_id`) |
-| `date` | `messages.date_received` (Unix Timestamp) |
-| `read status` | `messages.read` (Integer: 0=Unread, 1=Read) |
-
-### Implementation Pattern (Python/SQL)
-
-```python
-import sqlite3
-import os
-import glob
-
-def query_local_mail_index(limit=50):
-    # Dynamic path resolution for V9/V10/V11
-    base_path = os.path.expanduser("~/Library/Mail/V*/MailData/Envelope Index")
-    matches = glob.glob(base_path)
-    if not matches:
-        raise FileNotFoundError("Mail DB not found. Ensure Full Disk Access.")
-    
-    db_path = matches[0]
-    
-    # Connect in read-only mode using URI
-    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
-    cursor = conn.cursor()
-    
-    # Query: Unread messages with subjects and senders
-    query = """
-    SELECT 
-        m.date_received,
-        subj.subject,
-        addr.address
-    FROM messages m
-    JOIN subjects subj ON m.subject_prefix_id = subj.rowid
-    JOIN addresses addr ON m.sender_address_id = addr.rowid
-    WHERE m.read = 0
-    ORDER BY m.date_received DESC
-    LIMIT ?;
-    """
-    
-    results = cursor.execute(query, (limit,)).fetchall()
-    conn.close()
-    return results
-
-```
-
----
-
-## 4. Performance Comparison
-
-| Metric | OAuth + AppleScript | **App Password + Direct DB** | Improvement |
-| --- | --- | --- | --- |
-| **Auth Setup** | High Complexity (Tokens) | **Low** (Single String) | 90% less setup |
-| **Read Speed (1k items)** | ~45 seconds (UI iter) | **~0.2 seconds** (SQL) | **225x Faster** |
-| **Mark Read Speed** | ~1 sec per item | **~0.5 sec total** (Batch) | **Instant** |
-| **System Load** | High (Launches App) | **None** (Background) | Silent execution |
+This project is intentionally IMAP-only and does not access local Mail.app databases or AppleScript.

@@ -29,9 +29,6 @@ export interface TestPatternResult {
   sample_matches: Email[];
 }
 
-// Email provider types
-export type EmailProvider = "apple_mail" | "gmail";
-
 export interface GmailEmail {
   uid: number;
   message_id: string;
@@ -41,7 +38,6 @@ export interface GmailEmail {
 }
 
 export interface AppSettings {
-  provider: EmailProvider | null;
   gmail_email: string | null;
 }
 

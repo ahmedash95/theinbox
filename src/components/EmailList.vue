@@ -109,7 +109,7 @@ function formatDate(dateStr: string): string {
           class="toolbar-button"
           @click="emit('force-refresh')"
           :disabled="loading || marking"
-          title="Force refresh from Mail"
+          title="Force refresh from Gmail"
         >
           <RefreshCcw :size="15" />
         </button>

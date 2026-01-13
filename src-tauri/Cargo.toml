@@ -19,8 +19,6 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 regex = "1"
 dirs = "5"
-rusqlite = { version = "0.32", features = ["bundled"] }
-glob = "0.3"
 imap = "2"
 native-tls = "0.2"
 security-framework = "2"
