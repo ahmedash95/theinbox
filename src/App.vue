@@ -4,7 +4,45 @@ import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import FilterList from "./components/FilterList.vue";
 import EmailList from "./components/EmailList.vue";
-import type { Email, FilterPattern, EmailWithMatches } from "./types";
+import EmailDetail from "./components/EmailDetail.vue";
+import SettingsModal from "./components/SettingsModal.vue";
+import type { Email, FilterPattern, EmailWithMatches, EmailProvider, GmailEmail } from "./types";
+
+// Settings state
+const showSettings = ref(false);
+const provider = ref<EmailProvider | null>(null);
+const gmailEmail = ref<string | null>(null);
+
+// Load settings from localStorage
+function loadSettings() {
+  const saved = localStorage.getItem("inboxcleanup_settings");
+  if (saved) {
+    try {
+      const settings = JSON.parse(saved);
+      provider.value = settings.provider || null;
+      gmailEmail.value = settings.gmail_email || null;
+    } catch {
+      provider.value = null;
+      gmailEmail.value = null;
+    }
+  }
+}
+
+// Save settings to localStorage
+function saveSettings(newProvider: EmailProvider, newGmailEmail?: string) {
+  provider.value = newProvider;
+  gmailEmail.value = newGmailEmail || null;
+  localStorage.setItem(
+    "inboxcleanup_settings",
+    JSON.stringify({
+      provider: newProvider,
+      gmail_email: newGmailEmail || null,
+    })
+  );
+  showSettings.value = false;
+  // Refresh emails with new provider
+  refreshEmails();
+}
 
 // Window drag functionality
 function startDrag(e: MouseEvent) {
@@ -30,6 +68,7 @@ const initialLoad = ref(true);
 const marking = ref(false);
 const markingCount = ref(0);
 const error = ref<string | null>(null);
+const viewingEmail = ref<EmailWithMatches | null>(null);
 
 // View mode: 'all' shows all unread, 'filtered' shows only matching filters
 const viewMode = ref<"all" | "filtered">("all");
@@ -133,9 +172,18 @@ function selectAllFilters() {
 // Load filters and emails on mount - but don't block UI
 onMounted(async () => {
   await nextTick();
+  loadSettings();
   await loadFilters();
-  await refreshEmails();
-  initialLoad.value = false;
+  
+  // Show settings if no provider configured
+  if (!provider.value) {
+    showSettings.value = true;
+    loading.value = false;
+    initialLoad.value = false;
+  } else {
+    await refreshEmails();
+    initialLoad.value = false;
+  }
 });
 
 // When filters change, just re-compute (no need to re-fetch)
@@ -169,14 +217,38 @@ async function saveFilters(newFilters: FilterPattern[]) {
 }
 
 async function refreshEmails() {
-  console.log("[UI] Refreshing emails...");
+  if (!provider.value) {
+    showSettings.value = true;
+    return;
+  }
+
+  console.log("[UI] Refreshing emails via", provider.value);
   loading.value = true;
   error.value = null;
   selectedIds.value = new Set();
 
   try {
-    allEmails.value = await invoke<Email[]>("get_unread_emails", { inboxOnly: true });
-    console.log("[UI] Got", allEmails.value.length, "unread emails");
+    if (provider.value === "gmail" && gmailEmail.value) {
+      // Fetch from Gmail via IMAP
+      const gmailEmails = await invoke<GmailEmail[]>("gmail_fetch_unread", {
+        email: gmailEmail.value,
+      });
+      // Convert GmailEmail to Email format
+      allEmails.value = gmailEmails.map((e) => ({
+        id: e.uid.toString(),
+        message_id: e.message_id,
+        subject: e.subject,
+        sender: e.sender,
+        date_received: e.date,
+        mailbox: "INBOX",
+        account: gmailEmail.value!,
+      }));
+      console.log("[UI] Got", allEmails.value.length, "unread Gmail emails");
+    } else {
+      // Fetch from Apple Mail (SQLite/AppleScript)
+      allEmails.value = await invoke<Email[]>("get_unread_emails", { inboxOnly: true });
+      console.log("[UI] Got", allEmails.value.length, "unread emails");
+    }
   } catch (e) {
     console.error("Failed to fetch emails:", e);
     error.value = String(e);
@@ -187,14 +259,36 @@ async function refreshEmails() {
 }
 
 async function forceRefresh() {
-  console.log("[UI] Force refreshing emails...");
+  if (!provider.value) {
+    showSettings.value = true;
+    return;
+  }
+
+  console.log("[UI] Force refreshing emails via", provider.value);
   loading.value = true;
   error.value = null;
   selectedIds.value = new Set();
 
   try {
-    allEmails.value = await invoke<Email[]>("force_refresh", { inboxOnly: true });
-    console.log("[UI] Force refreshed", allEmails.value.length, "unread emails");
+    if (provider.value === "gmail" && gmailEmail.value) {
+      // Gmail always fetches fresh (no cache)
+      const gmailEmails = await invoke<GmailEmail[]>("gmail_fetch_unread", {
+        email: gmailEmail.value,
+      });
+      allEmails.value = gmailEmails.map((e) => ({
+        id: e.uid.toString(),
+        message_id: e.message_id,
+        subject: e.subject,
+        sender: e.sender,
+        date_received: e.date,
+        mailbox: "INBOX",
+        account: gmailEmail.value!,
+      }));
+      console.log("[UI] Force refreshed", allEmails.value.length, "Gmail emails");
+    } else {
+      allEmails.value = await invoke<Email[]>("force_refresh", { inboxOnly: true });
+      console.log("[UI] Force refreshed", allEmails.value.length, "unread emails");
+    }
   } catch (e) {
     console.error("Failed to refresh emails:", e);
     error.value = String(e);
@@ -231,8 +325,21 @@ async function markAsRead() {
 
   try {
     const ids = Array.from(selectedIds.value);
-    const count = await invoke<number>("mark_as_read", { emailIds: ids });
-    console.log(`Marked ${count} emails as read`);
+    let count: number;
+
+    if (provider.value === "gmail" && gmailEmail.value) {
+      // Gmail uses UIDs (numbers)
+      const uids = ids.map((id) => parseInt(id, 10));
+      count = await invoke<number>("gmail_mark_as_read", {
+        email: gmailEmail.value,
+        uids,
+      });
+      console.log(`Marked ${count} Gmail emails as read`);
+    } else {
+      // Apple Mail
+      count = await invoke<number>("mark_as_read", { emailIds: ids });
+      console.log(`Marked ${count} emails as read`);
+    }
     
     // Remove marked emails from local list immediately for snappy UI
     const markedSet = new Set(ids);
@@ -252,10 +359,36 @@ function setViewMode(mode: "all" | "filtered") {
   viewMode.value = mode;
   selectedIds.value = new Set();
 }
+
+function viewEmail(email: EmailWithMatches) {
+  viewingEmail.value = email;
+}
+
+function backToList() {
+  viewingEmail.value = null;
+}
+
+// Handle browser back button
+if (typeof window !== 'undefined') {
+  window.addEventListener('popstate', () => {
+    if (viewingEmail.value) {
+      viewingEmail.value = null;
+    }
+  });
+}
 </script>
 
 <template>
   <div class="app">
+    <!-- Settings Modal -->
+    <SettingsModal
+      :show="showSettings"
+      :current-provider="provider"
+      :current-gmail-email="gmailEmail"
+      @close="showSettings = false"
+      @save="saveSettings"
+    />
+
     <!-- Transparent draggable titlebar -->
     <div 
       class="titlebar" 
@@ -263,8 +396,13 @@ function setViewMode(mode: "all" | "filtered") {
       data-tauri-drag-region
     >
       <div class="titlebar-traffic-lights"></div>
-      <div class="titlebar-title">InboxCleanup</div>
-      <div class="titlebar-spacer"></div>
+      <div class="titlebar-title">
+        InboxCleanup
+        <span v-if="provider" class="provider-badge">{{ provider === 'gmail' ? 'Gmail' : 'Apple Mail' }}</span>
+      </div>
+      <button class="titlebar-settings" @click="showSettings = true" data-no-drag>
+        ⚙️
+      </button>
     </div>
 
     <!-- Navigation Split View -->
@@ -276,67 +414,80 @@ function setViewMode(mode: "all" | "filtered") {
       
       <!-- Content -->
       <section class="split-content">
-        <!-- Navigation Bar -->
-        <nav class="navbar">
-          <div class="navbar-title">
-            <div class="segmented-control">
-              <button
-                :class="{ active: viewMode === 'all' }"
-                @click="setViewMode('all')"
-              >
-                All
-                <span class="segment-badge">{{ allEmails.length }}</span>
-              </button>
-              <button
-                :class="{ active: viewMode === 'filtered' }"
-                @click="setViewMode('filtered')"
-              >
-                Filtered
-                <span class="segment-badge">{{ filteredCount }}</span>
-              </button>
+        <!-- Show email list or detail view -->
+        <template v-if="!viewingEmail">
+          <!-- Navigation Bar -->
+          <nav class="navbar">
+            <div class="navbar-title">
+              <div class="segmented-control">
+                <button
+                  :class="{ active: viewMode === 'all' }"
+                  @click="setViewMode('all')"
+                >
+                  All
+                  <span class="segment-badge">{{ allEmails.length }}</span>
+                </button>
+                <button
+                  :class="{ active: viewMode === 'filtered' }"
+                  @click="setViewMode('filtered')"
+                >
+                  Filtered
+                  <span class="segment-badge">{{ filteredCount }}</span>
+                </button>
+              </div>
             </div>
+          </nav>
+
+          <!-- Filter Pills (in filtered mode) -->
+          <div v-if="viewMode === 'filtered' && enabledFilters.length > 0" class="filter-pills">
+            <button
+              class="pill"
+              :class="{ active: activeFilterIds.size === 0 }"
+              @click="selectAllFilters"
+            >
+              All Filters
+            </button>
+            <button
+              v-for="filter in enabledFilters"
+              :key="filter.id"
+              class="pill"
+              :class="{ active: activeFilterIds.has(filter.id) }"
+              @click="toggleActiveFilter(filter.id)"
+            >
+              {{ filter.name }}
+            </button>
           </div>
-        </nav>
 
-        <!-- Filter Pills (in filtered mode) -->
-        <div v-if="viewMode === 'filtered' && enabledFilters.length > 0" class="filter-pills">
-          <button
-            class="pill"
-            :class="{ active: activeFilterIds.size === 0 }"
-            @click="selectAllFilters"
-          >
-            All Filters
-          </button>
-          <button
-            v-for="filter in enabledFilters"
-            :key="filter.id"
-            class="pill"
-            :class="{ active: activeFilterIds.has(filter.id) }"
-            @click="toggleActiveFilter(filter.id)"
-          >
-            {{ filter.name }}
-          </button>
-        </div>
+          <!-- Error Banner -->
+          <div v-if="error" class="error-banner">
+            <span>{{ error }}</span>
+            <button @click="error = null">×</button>
+          </div>
 
-        <!-- Error Banner -->
-        <div v-if="error" class="error-banner">
-          <span>{{ error }}</span>
-          <button @click="error = null">×</button>
-        </div>
+          <!-- Email List -->
+          <EmailList
+            :emails="displayedEmails"
+            :loading="loading"
+            :marking="marking"
+            :marking-count="markingCount"
+            :selected-ids="selectedIds"
+            @toggle-select="toggleSelect"
+            @select-all="selectAll"
+            @deselect-all="deselectAll"
+            @mark-read="markAsRead"
+            @refresh="refreshEmails"
+            @force-refresh="forceRefresh"
+            @view-email="viewEmail"
+          />
+        </template>
 
-        <!-- Email List -->
-        <EmailList
-          :emails="displayedEmails"
-          :loading="loading"
-          :marking="marking"
-          :marking-count="markingCount"
-          :selected-ids="selectedIds"
-          @toggle-select="toggleSelect"
-          @select-all="selectAll"
-          @deselect-all="deselectAll"
-          @mark-read="markAsRead"
-          @refresh="refreshEmails"
-          @force-refresh="forceRefresh"
+        <!-- Email Detail View -->
+        <EmailDetail
+          v-else
+          :email="viewingEmail"
+          :provider="provider"
+          :gmail-email="gmailEmail"
+          @back="backToList"
         />
       </section>
     </main>
@@ -462,18 +613,44 @@ body {
   flex-shrink: 0;
 }
 
-.titlebar-spacer {
-  width: 70px;
-  flex-shrink: 0;
-}
 
 .titlebar-title {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
   font-size: 13px;
   font-weight: 600;
   color: var(--text-secondary);
   text-align: center;
   flex: 1;
   text-shadow: 0 0 10px rgba(255, 255, 255, 0.3);
+}
+
+.provider-badge {
+  font-size: 10px;
+  font-weight: 500;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: var(--accent-light);
+  color: var(--accent-color);
+}
+
+.titlebar-settings {
+  background: none;
+  border: none;
+  font-size: 14px;
+  cursor: pointer;
+  padding: 6px 10px;
+  border-radius: 6px;
+  opacity: 0.7;
+  transition: all 0.15s ease;
+  -webkit-app-region: no-drag;
+}
+
+.titlebar-settings:hover {
+  opacity: 1;
+  background: var(--surface-hover);
 }
 
 @media (prefers-color-scheme: dark) {

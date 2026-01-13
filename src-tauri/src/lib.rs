@@ -1,11 +1,15 @@
 mod cache;
 mod filters;
+mod gmail;
 mod mail;
 
 use tauri::Manager;
 use cache::{clear_cache, load_from_cache, save_to_cache};
 use filters::{apply_filters, load_filters, save_filters, test_pattern, FilterConfig};
-use mail::{fetch_unread_emails, fetch_unread_emails_inbox_only, mark_emails_as_read, Email, FilterField, FilterPattern};
+use mail::{
+    fetch_unread_emails, fetch_unread_emails_inbox_only, fetch_unread_emails_sqlite,
+    mark_emails_as_read, fetch_email_body, Email, EmailBody, FilterField, FilterPattern,
+};
 use std::sync::Mutex;
 use tauri::State;
 
@@ -15,6 +19,7 @@ struct EmailCache {
 }
 
 /// Fetch emails, using file cache if available
+/// Uses high-performance SQLite access with AppleScript fallback
 async fn fetch_with_cache(inbox_only: bool, use_cache: bool) -> Result<Vec<Email>, String> {
     // Try file cache first (for dev/debug)
     if use_cache {
@@ -23,12 +28,26 @@ async fn fetch_with_cache(inbox_only: bool, use_cache: bool) -> Result<Vec<Email
         }
     }
 
-    // Fetch from Mail.app
+    // Try high-performance SQLite access first
     let emails = tokio::task::spawn_blocking(move || {
-        if inbox_only {
-            fetch_unread_emails_inbox_only()
-        } else {
-            fetch_unread_emails()
+        // Attempt SQLite (fast path)
+        match fetch_unread_emails_sqlite() {
+            Ok(emails) => {
+                println!("[InboxCleanup] Using high-performance SQLite mode");
+                Ok(emails)
+            }
+            Err(sqlite_err) => {
+                // Fall back to AppleScript (slower but always works)
+                println!(
+                    "[InboxCleanup] SQLite unavailable ({}), falling back to AppleScript",
+                    sqlite_err
+                );
+                if inbox_only {
+                    fetch_unread_emails_inbox_only()
+                } else {
+                    fetch_unread_emails()
+                }
+            }
         }
     })
     .await
@@ -229,6 +248,72 @@ fn match_emails(
     Ok(matched)
 }
 
+// =============================================================================
+// Gmail IMAP Commands (High Performance with App Passwords)
+// =============================================================================
+
+/// Store Gmail credentials securely in macOS Keychain
+#[tauri::command]
+async fn gmail_store_credentials(email: String, app_password: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || gmail::store_credentials(&email, &app_password))
+        .await
+        .map_err(|e| format!("Task error: {}", e))?
+}
+
+/// Test Gmail connection without storing credentials
+#[tauri::command]
+async fn gmail_test_connection(email: String, app_password: String) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || gmail::test_connection(&email, &app_password))
+        .await
+        .map_err(|e| format!("Task error: {}", e))?
+}
+
+/// Check if Gmail account is configured
+#[tauri::command]
+fn gmail_is_configured(email: String) -> bool {
+    gmail::has_credentials(&email)
+}
+
+/// Delete Gmail credentials from Keychain
+#[tauri::command]
+async fn gmail_delete_credentials(email: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || gmail::delete_credentials(&email))
+        .await
+        .map_err(|e| format!("Task error: {}", e))?
+}
+
+/// Fetch unread emails from Gmail via IMAP
+#[tauri::command]
+async fn gmail_fetch_unread(email: String) -> Result<Vec<gmail::GmailEmail>, String> {
+    tokio::task::spawn_blocking(move || gmail::fetch_unread_emails(&email))
+        .await
+        .map_err(|e| format!("Task error: {}", e))?
+}
+
+/// Mark Gmail emails as read (batch operation)
+#[tauri::command]
+async fn gmail_mark_as_read(email: String, uids: Vec<u32>) -> Result<usize, String> {
+    tokio::task::spawn_blocking(move || gmail::mark_emails_as_read(&email, uids))
+        .await
+        .map_err(|e| format!("Task error: {}", e))?
+}
+
+/// Fetch email body content by ID (Apple Mail)
+#[tauri::command]
+async fn get_email_body(email_id: String) -> Result<EmailBody, String> {
+    tokio::task::spawn_blocking(move || fetch_email_body(&email_id))
+        .await
+        .map_err(|e| format!("Task error: {}", e))?
+}
+
+/// Fetch Gmail email body by UID
+#[tauri::command]
+async fn gmail_fetch_body(email: String, uid: u32) -> Result<gmail::EmailBody, String> {
+    tokio::task::spawn_blocking(move || gmail::fetch_email_body(&email, uid))
+        .await
+        .map_err(|e| format!("Task error: {}", e))?
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -245,7 +330,16 @@ pub fn run() {
             preview_pattern,
             apply_filters_to_cache,
             force_refresh,
-            test_pattern_match_count
+            test_pattern_match_count,
+            get_email_body,
+            // Gmail IMAP commands
+            gmail_store_credentials,
+            gmail_test_connection,
+            gmail_is_configured,
+            gmail_delete_credentials,
+            gmail_fetch_unread,
+            gmail_mark_as_read,
+            gmail_fetch_body
         ])
         .setup(|app| {
             let window = app.get_webview_window("main").unwrap();

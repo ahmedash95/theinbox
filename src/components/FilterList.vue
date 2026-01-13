@@ -138,6 +138,7 @@ function getMatchCount(filter: FilterPattern): number {
     <FilterModal
       :show="showModal"
       :edit-filter="editingFilter"
+      :emails="emails"
       @close="showModal = false"
       @save="handleSave"
       @delete="handleDelete"

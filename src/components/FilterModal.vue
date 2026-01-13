@@ -1,12 +1,12 @@
 <script setup lang="ts">
 import { ref, watch, computed } from "vue";
-import { invoke } from "@tauri-apps/api/core";
 import { X, Trash2, Lightbulb } from "lucide-vue-next";
-import type { FilterPattern, FilterField, TestPatternResult } from "../types";
+import type { FilterPattern, FilterField, TestPatternResult, Email } from "../types";
 
 const props = defineProps<{
   show: boolean;
   editFilter?: FilterPattern | null;
+  emails: Email[];
 }>();
 
 const emit = defineEmits<{
@@ -59,18 +59,60 @@ watch([pattern, field, isRegex], () => {
   }
 });
 
-async function testPattern() {
+// Test pattern locally against passed emails
+function testPattern() {
   if (!pattern.value.trim()) return;
 
   testing.value = true;
   testError.value = null;
 
   try {
-    testResult.value = await invoke<TestPatternResult>("test_pattern_match_count", {
-      pattern: pattern.value,
-      field: field.value,
-      isRegex: isRegex.value,
-    });
+    const patternStr = pattern.value;
+    const fieldVal = field.value;
+    const isRegexVal = isRegex.value;
+    
+    let matched: Email[];
+    
+    if (isRegexVal) {
+      // Regex matching
+      const regex = new RegExp(patternStr, "i");
+      matched = props.emails.filter((email) => {
+        switch (fieldVal) {
+          case "subject":
+            return regex.test(email.subject);
+          case "sender":
+            return regex.test(email.sender);
+          case "any":
+            return regex.test(email.subject) || regex.test(email.sender);
+          default:
+            return false;
+        }
+      });
+    } else {
+      // Simple case-insensitive substring match
+      const patternLower = patternStr.toLowerCase();
+      matched = props.emails.filter((email) => {
+        switch (fieldVal) {
+          case "subject":
+            return email.subject.toLowerCase().includes(patternLower);
+          case "sender":
+            return email.sender.toLowerCase().includes(patternLower);
+          case "any":
+            return (
+              email.subject.toLowerCase().includes(patternLower) ||
+              email.sender.toLowerCase().includes(patternLower)
+            );
+          default:
+            return false;
+        }
+      });
+    }
+    
+    testResult.value = {
+      match_count: matched.length,
+      total_count: props.emails.length,
+      sample_matches: matched.slice(0, 5),
+    };
   } catch (e) {
     testError.value = String(e);
     testResult.value = null;

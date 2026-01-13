@@ -18,6 +18,7 @@ const emit = defineEmits<{
   (e: "mark-read"): void;
   (e: "refresh"): void;
   (e: "force-refresh"): void;
+  (e: "view-email", email: EmailWithMatches): void;
 }>();
 
 const allSelected = computed(() => {
@@ -133,9 +134,8 @@ function formatDate(dateStr: string): string {
           :key="email.id"
           class="list-row"
           :class="{ selected: selectedIds.has(email.id) }"
-          @click="emit('toggle-select', email.id)"
         >
-          <div class="row-checkbox">
+          <div class="row-checkbox" @click.stop="emit('toggle-select', email.id)">
             <input
               type="checkbox"
               :checked="selectedIds.has(email.id)"
@@ -143,13 +143,13 @@ function formatDate(dateStr: string): string {
               @change="emit('toggle-select', email.id)"
             />
           </div>
-          
-          <div class="row-content">
+
+          <div class="row-content" @click="emit('view-email', email)">
             <div class="row-header">
-              <span class="row-subject">{{ email.subject || "(No Subject)" }}</span>
+              <span class="row-subject selectable">{{ email.subject || "(No Subject)" }}</span>
               <span class="row-date">{{ formatDate(email.date_received) }}</span>
             </div>
-            <div class="row-sender">{{ formatSender(email.sender) }}</div>
+            <div class="row-sender selectable">{{ formatSender(email.sender) }}</div>
             <div class="row-footer" v-if="email.matchingFilters.length > 0">
               <span
                 v-for="tag in email.matchingFilters"
@@ -158,8 +158,8 @@ function formatDate(dateStr: string): string {
               >{{ tag }}</span>
             </div>
           </div>
-          
-          <div class="row-chevron">
+
+          <div class="row-chevron" @click="emit('view-email', email)">
             <ChevronRight :size="16" />
           </div>
         </div>
@@ -330,12 +330,7 @@ function formatDate(dateStr: string): string {
   gap: 12px;
   padding: 10px 12px;
   border-bottom: 1px solid var(--separator-color);
-  cursor: pointer;
   transition: background 0.1s ease;
-}
-
-.list-row:hover {
-  background: var(--surface-hover);
 }
 
 .list-row.selected {
@@ -348,6 +343,14 @@ function formatDate(dateStr: string): string {
 
 .row-checkbox {
   flex-shrink: 0;
+  cursor: pointer;
+  padding: 4px;
+  margin: -4px;
+  border-radius: 4px;
+}
+
+.row-checkbox:hover {
+  background: var(--surface-hover);
 }
 
 .row-checkbox input {
@@ -363,6 +366,11 @@ function formatDate(dateStr: string): string {
   display: flex;
   flex-direction: column;
   gap: 2px;
+  cursor: pointer;
+}
+
+.row-content:hover {
+  opacity: 0.8;
 }
 
 .row-header {
@@ -419,6 +427,22 @@ function formatDate(dateStr: string): string {
   flex-shrink: 0;
   color: var(--text-tertiary);
   opacity: 0.5;
+  cursor: pointer;
+  padding: 8px;
+  margin: -8px;
+  border-radius: 4px;
+}
+
+.row-chevron:hover {
+  opacity: 0.8;
+  background: var(--surface-hover);
+}
+
+/* Selectable text in rows */
+.selectable {
+  user-select: text;
+  -webkit-user-select: text;
+  cursor: text;
 }
 
 /* Empty state */

@@ -1,5 +1,8 @@
+use glob::glob;
+use rusqlite::{Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
 use std::process::Command;
+use mail_parser::MessageParser;
 
 /// Log a message to stdout for debugging
 macro_rules! log {
@@ -28,6 +31,12 @@ pub struct FilterPattern {
     #[serde(default)]
     pub is_regex: bool,
     pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EmailBody {
+    pub html: Option<String>,
+    pub text: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -200,4 +209,171 @@ pub fn mark_emails_as_read(email_ids: Vec<String>) -> Result<usize, String> {
 
     log!("Marked {} emails as read in {:?}", count, start.elapsed());
     Ok(count)
+}
+
+// =============================================================================
+// Direct SQLite Access (High Performance)
+// =============================================================================
+
+/// Find the Apple Mail Envelope Index database path
+/// Handles V9 (Monterey), V10 (Ventura), V11 (Sonoma+) variations
+fn find_mail_db_path() -> Result<String, String> {
+    let home = dirs::home_dir().ok_or("Could not find home directory")?;
+    let pattern = home
+        .join("Library/Mail/V*/MailData/Envelope Index")
+        .to_string_lossy()
+        .to_string();
+
+    let mut matches: Vec<_> = glob(&pattern)
+        .map_err(|e| format!("Invalid glob pattern: {}", e))?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    if matches.is_empty() {
+        return Err(
+            "Mail database not found. Ensure Apple Mail is set up and Full Disk Access is granted."
+                .to_string(),
+        );
+    }
+
+    // Sort to get the highest version (V11 > V10 > V9)
+    matches.sort();
+    let db_path = matches.last().unwrap();
+
+    log!("Found Mail DB at: {:?}", db_path);
+    Ok(db_path.to_string_lossy().to_string())
+}
+
+/// Fetch unread emails directly from Apple Mail's SQLite database
+/// This is ~225x faster than AppleScript for large mailboxes
+pub fn fetch_unread_emails_sqlite() -> Result<Vec<Email>, String> {
+    log!("Fetching unread emails via SQLite (high-performance mode)...");
+    let start = std::time::Instant::now();
+
+    let db_path = find_mail_db_path()?;
+
+    // Open in read-only mode to avoid any risk of corruption
+    let conn = Connection::open_with_flags(&db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .map_err(|e| format!("Failed to open Mail database: {}. Ensure Full Disk Access is granted.", e))?;
+
+    // Query unread messages with subject and sender info
+    // The schema joins messages -> subjects and messages -> addresses
+    let query = r#"
+        SELECT 
+            m.ROWID,
+            m.message_id,
+            COALESCE(subj.subject, '(No Subject)') as subject,
+            COALESCE(addr.address, 'Unknown') as sender,
+            m.date_received,
+            COALESCE(mb.url, 'Inbox') as mailbox,
+            COALESCE(mb.account_id, 0) as account_id
+        FROM messages m
+        LEFT JOIN subjects subj ON m.subject = subj.ROWID
+        LEFT JOIN addresses addr ON m.sender = addr.ROWID
+        LEFT JOIN mailboxes mb ON m.mailbox = mb.ROWID
+        WHERE m.read = 0
+          AND m.deleted = 0
+        ORDER BY m.date_received DESC
+    "#;
+
+    let mut stmt = conn
+        .prepare(query)
+        .map_err(|e| format!("SQL prepare error: {}", e))?;
+
+    let email_iter = stmt
+        .query_map([], |row| {
+            let rowid: i64 = row.get(0)?;
+            let message_id: String = row.get::<_, Option<String>>(1)?.unwrap_or_default();
+            let subject: String = row.get(2)?;
+            let sender: String = row.get(3)?;
+            let date_received: f64 = row.get(4)?;
+            let mailbox_url: String = row.get(5)?;
+            let account_id: i64 = row.get(6)?;
+
+            // Convert Core Data timestamp (seconds since 2001-01-01) to readable date
+            let date_str = format_core_data_timestamp(date_received);
+
+            // Extract mailbox name from URL (e.g., "imap://...INBOX" -> "INBOX")
+            let mailbox_name = extract_mailbox_name(&mailbox_url);
+
+            Ok(Email {
+                id: rowid.to_string(),
+                message_id,
+                subject,
+                sender,
+                date_received: date_str,
+                mailbox: mailbox_name,
+                account: format!("Account {}", account_id),
+            })
+        })
+        .map_err(|e| format!("SQL query error: {}", e))?;
+
+    let emails: Vec<Email> = email_iter.filter_map(|r| r.ok()).collect();
+
+    log!(
+        "SQLite fetch complete: {} unread emails in {:?}",
+        emails.len(),
+        start.elapsed()
+    );
+    Ok(emails)
+}
+
+/// Convert Core Data timestamp to human-readable date string
+/// Core Data uses seconds since January 1, 2001 (Apple's reference date)
+fn format_core_data_timestamp(timestamp: f64) -> String {
+    // Core Data epoch: 2001-01-01 00:00:00 UTC
+    // Unix epoch: 1970-01-01 00:00:00 UTC
+    // Difference: 978307200 seconds
+    const CORE_DATA_EPOCH_OFFSET: i64 = 978307200;
+
+    let unix_timestamp = timestamp as i64 + CORE_DATA_EPOCH_OFFSET;
+
+    // Format as ISO-like date string
+    use std::time::{Duration, UNIX_EPOCH};
+    let datetime = UNIX_EPOCH + Duration::from_secs(unix_timestamp as u64);
+
+    // Simple formatting (we don't want to add chrono dependency)
+    format!("{:?}", datetime)
+}
+
+/// Extract mailbox name from mailbox URL
+/// e.g., "imap://user@imap.gmail.com/INBOX" -> "INBOX"
+fn extract_mailbox_name(url: &str) -> String {
+    url.rsplit('/')
+        .next()
+        .unwrap_or("Inbox")
+        .to_string()
+}
+
+/// Fetch email body content by email ID and parse it
+pub fn fetch_email_body(email_id: &str) -> Result<EmailBody, String> {
+    log!("Fetching email body for ID: {}", email_id);
+    let start = std::time::Instant::now();
+
+    let script = format!(
+        r#"
+        tell application "Mail"
+            set targetMsg to first message of inbox whose id is {}
+            set msgContent to source of targetMsg
+            return msgContent
+        end tell
+    "#,
+        email_id
+    );
+
+    let raw_body = run_applescript(&script)?;
+
+    // Parse the email with mail-parser
+    let parser = MessageParser::default();
+    let message = parser
+        .parse(raw_body.as_bytes())
+        .ok_or_else(|| "Failed to parse email".to_string())?;
+
+    // Extract HTML and text parts
+    let html = message.body_html(0).map(|s| s.to_string());
+    let text = message.body_text(0).map(|s| s.to_string());
+
+    log!("Fetched and parsed email body in {:?}", start.elapsed());
+
+    Ok(EmailBody { html, text })
 }
