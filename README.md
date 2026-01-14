@@ -2,6 +2,27 @@
 
 This is a simple macos app built on top of Rust. It uses Gmail IMAP with an App Password to read unread emails and mark them as read in bulk.
 
+## Auto-updates (Tauri updater)
+
+This app uses the Tauri updater plugin and GitHub Releases. The updater manifest is served from:
+`https://github.com/ahmedash95/theinbox/releases/latest/download/latest.json`
+
+### Setup
+
+1) Generate a signing key once:
+`pnpm tauri signer generate -w ~/.tauri/inboxcleanup.key`
+2) Export env vars (used by build and updater):
+`export TAURI_SIGNING_PRIVATE_KEY=\"$(cat ~/.tauri/inboxcleanup.key)\"`
+`export TAURI_SIGNING_PRIVATE_KEY_PASSWORD=\"<password>\"`
+`export TAURI_SIGNING_PUBLIC_KEY=\"<public-key-from-generate>\"`
+
+### Release
+
+`make publish` will:
+- build a signed release
+- create a git tag from `src-tauri/tauri.conf.json` version
+- create/update a GitHub Release with the `.dmg`, updater artifacts, and `latest.json`
+
 
 ### The Problem
 

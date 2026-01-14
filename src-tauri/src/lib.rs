@@ -185,6 +185,7 @@ async fn gmail_fetch_body(email: String, uid: u32) -> Result<gmail::EmailBody, S
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             get_filters,
             save_filter_patterns,

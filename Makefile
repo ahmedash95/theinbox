@@ -1,4 +1,4 @@
-.PHONY: dev build release install clean
+.PHONY: dev build release install clean publish
 
 # Development server
 dev:
@@ -11,6 +11,10 @@ build:
 # Build release version
 release:
 	pnpm tauri build
+
+# Build + tag + GitHub release (requires gh and TAURI_SIGNING_* env vars)
+publish:
+	./scripts/release.sh
 
 # Build and install to Applications folder
 install: release
@@ -43,4 +47,5 @@ help:
 	@echo "  make release       - Build release version"
 	@echo "  make install       - Build release and install to /Applications"
 	@echo "  make install-quick - Install to /Applications (skip build if exists)"
+	@echo "  make publish       - Build + tag + GitHub release"
 	@echo "  make clean         - Clean build artifacts"

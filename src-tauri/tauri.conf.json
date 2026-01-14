@@ -29,6 +29,14 @@
       "csp": null
     }
   },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/ahmedash95/theinbox/releases/latest/download/latest.json"
+      ],
+      "pubkey": "{{ env.TAURI_SIGNING_PUBLIC_KEY }}"
+    }
+  },
   "bundle": {
     "active": true,
     "targets": "all",

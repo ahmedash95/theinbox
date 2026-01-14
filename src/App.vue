@@ -6,6 +6,9 @@ import FilterList from "./components/FilterList.vue";
 import EmailList from "./components/EmailList.vue";
 import EmailDetail from "./components/EmailDetail.vue";
 import SettingsModal from "./components/SettingsModal.vue";
+import Button from "./components/ui/button.vue";
+import Badge from "./components/ui/badge.vue";
+import { checkForUpdates } from "./updater";
 import type { Email, FilterPattern, EmailWithMatches, GmailEmail } from "./types";
 
 // Settings state
@@ -167,6 +170,7 @@ function selectAllFilters() {
 // Load filters and emails on mount - but don't block UI
 onMounted(async () => {
   await nextTick();
+  void checkForUpdates();
   loadSettings();
   await loadFilters();
   
