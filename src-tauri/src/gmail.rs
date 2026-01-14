@@ -8,6 +8,8 @@ use native_tls::TlsStream;
 use security_framework::passwords::{delete_generic_password, get_generic_password, set_generic_password};
 use serde::{Deserialize, Serialize};
 use std::net::TcpStream;
+use base64::engine::general_purpose;
+use base64::Engine;
 use mail_parser::MessageParser;
 
 const KEYCHAIN_SERVICE: &str = "com.inboxcleanup.gmail";
@@ -158,7 +160,22 @@ pub fn fetch_unread_emails(email: &str) -> Result<Vec<GmailEmail>, String> {
                     let host = addr.host
                         .map(|h| String::from_utf8_lossy(h).to_string())
                         .unwrap_or_default();
-                    format!("{}@{}", mailbox, host)
+                    let email = if mailbox.is_empty() || host.is_empty() {
+                        String::new()
+                    } else {
+                        format!("{}@{}", mailbox, host)
+                    };
+                    let name = addr.name
+                        .map(|n| decode_mime_header(n))
+                        .unwrap_or_default();
+
+                    if !name.is_empty() && !email.is_empty() {
+                        format!("{} <{}>", name, email)
+                    } else if !email.is_empty() {
+                        email
+                    } else {
+                        "Unknown".to_string()
+                    }
                 })
                 .unwrap_or_else(|| "Unknown".to_string());
             
@@ -241,8 +258,98 @@ pub fn test_connection(email: &str, app_password: &str) -> Result<String, String
 
 /// Decode MIME encoded header (basic implementation)
 fn decode_mime_header(bytes: &[u8]) -> String {
-    // Handle basic UTF-8 and ASCII
-    String::from_utf8_lossy(bytes).to_string()
+    let input = String::from_utf8_lossy(bytes).to_string();
+    decode_rfc2047_words(&input)
+}
+
+fn decode_rfc2047_words(input: &str) -> String {
+    let mut output = String::new();
+    let mut index = 0;
+
+    while let Some(start_rel) = input[index..].find("=?") {
+        let start = index + start_rel;
+        output.push_str(&input[index..start]);
+
+        let rest = &input[start + 2..];
+        let Some(q1) = rest.find('?') else {
+            output.push_str("=?");
+            index = start + 2;
+            continue;
+        };
+        let charset = &rest[..q1];
+        let rest = &rest[q1 + 1..];
+        let Some(q2) = rest.find('?') else {
+            output.push_str("=?");
+            index = start + 2;
+            continue;
+        };
+        let encoding = &rest[..q2];
+        let rest = &rest[q2 + 1..];
+        let Some(q3) = rest.find("?=") else {
+            output.push_str("=?");
+            index = start + 2;
+            continue;
+        };
+        let encoded = &rest[..q3];
+
+        let decoded = decode_encoded_word(charset, encoding, encoded);
+        output.push_str(&decoded);
+        index = start + 2 + q1 + 1 + q2 + 1 + q3 + 2;
+    }
+
+    output.push_str(&input[index..]);
+    output
+}
+
+fn decode_encoded_word(charset: &str, encoding: &str, encoded: &str) -> String {
+    let bytes = match encoding.to_ascii_lowercase().as_str() {
+        "q" => decode_q(encoded),
+        "b" => decode_b(encoded),
+        _ => encoded.as_bytes().to_vec(),
+    };
+
+    match charset.to_ascii_lowercase().as_str() {
+        "utf-8" | "utf8" => String::from_utf8_lossy(&bytes).to_string(),
+        _ => String::from_utf8_lossy(&bytes).to_string(),
+    }
+}
+
+fn decode_q(encoded: &str) -> Vec<u8> {
+    let mut out = Vec::with_capacity(encoded.len());
+    let bytes = encoded.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'_' => out.push(b' '),
+            b'=' if i + 2 < bytes.len() => {
+                if let (Some(hi), Some(lo)) = (hex_val(bytes[i + 1]), hex_val(bytes[i + 2])) {
+                    out.push((hi << 4) | lo);
+                    i += 3;
+                    continue;
+                } else {
+                    out.push(bytes[i]);
+                }
+            }
+            b => out.push(b),
+        }
+        i += 1;
+    }
+    out
+}
+
+fn decode_b(encoded: &str) -> Vec<u8> {
+    general_purpose::STANDARD
+        .decode(encoded.as_bytes())
+        .unwrap_or_else(|_| encoded.as_bytes().to_vec())
+}
+
+fn hex_val(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
 }
 
 /// Fetch email body by UID and parse it properly

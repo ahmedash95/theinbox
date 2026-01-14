@@ -3,6 +3,9 @@ import { ref, onMounted } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { ArrowLeft, Mail } from "lucide-vue-next";
 import type { EmailWithMatches, EmailBody } from "../types";
+import Button from "./ui/button.vue";
+import Badge from "./ui/badge.vue";
+import ScrollArea from "./ui/scroll-area.vue";
 
 const props = defineProps<{
   email: EmailWithMatches;
@@ -37,7 +40,7 @@ onMounted(async () => {
 
 function formatSender(sender: string): string {
   // Remove surrounding quotes if present
-  let cleaned = sender.replace(/^["']|["']$/g, '').trim();
+  let cleaned = sender.replace(/^["']|["']$/g, "").trim();
 
   // Extract name from "Name <email@example.com>" format
   const match = cleaned.match(/^(.+?)\s*<.+>$/);
@@ -46,7 +49,7 @@ function formatSender(sender: string): string {
   }
 
   // Remove any remaining quotes
-  cleaned = cleaned.replace(/^["']|["']$/g, '').trim();
+  cleaned = cleaned.replace(/^["']|["']$/g, "").trim();
 
   return cleaned || sender;
 }
@@ -69,246 +72,56 @@ function formatDate(dateStr: string): string {
 </script>
 
 <template>
-  <div class="email-detail-page">
-    <!-- Header with back button -->
-    <div class="detail-header">
-      <button class="back-button" @click="emit('back')" title="Back to list">
-        <ArrowLeft :size="20" />
-        <span>Back</span>
-      </button>
-      <div class="header-content">
-        <h2 class="subject">{{ email.subject || "(No Subject)" }}</h2>
-        <div class="metadata">
-          <div class="sender">{{ formatSender(email.sender) }}</div>
-          <div class="date">{{ formatDate(email.date_received) }}</div>
+  <div class="flex h-full flex-col">
+    <div class="border-b bg-muted/40 px-4 py-4">
+      <Button variant="ghost" size="sm" @click="emit('back')">
+        <ArrowLeft :size="16" />
+        Back
+      </Button>
+
+      <div class="mt-4 space-y-2">
+        <h2 class="text-lg font-semibold">{{ email.subject || "(No Subject)" }}</h2>
+        <div class="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+          <span class="font-medium text-foreground">{{ formatSender(email.sender) }}</span>
+          <span>•</span>
+          <span>{{ formatDate(email.date_received) }}</span>
         </div>
-        <div v-if="email.matchingFilters.length > 0" class="filter-tags">
-          <span
-            v-for="tag in email.matchingFilters"
-            :key="tag"
-            class="filter-tag"
-          >{{ tag }}</span>
+        <div v-if="email.matchingFilters.length > 0" class="flex flex-wrap gap-1">
+          <Badge v-for="tag in email.matchingFilters" :key="tag" variant="secondary">
+            {{ tag }}
+          </Badge>
         </div>
       </div>
     </div>
 
-    <!-- Body -->
-    <div class="detail-body">
-      <div v-if="loading" class="loading-state">
-        <div class="loading-spinner"></div>
-        <p>Loading email...</p>
-      </div>
-      <div v-else-if="error" class="error-state">
-        <Mail :size="48" :stroke-width="1" />
-        <p class="error-title">Failed to Load Email</p>
-        <p class="error-message">{{ error }}</p>
-      </div>
-      <div v-else class="body-content">
-        <!-- Render HTML if available -->
-        <div v-if="emailBody?.html" class="html-content" v-html="emailBody.html"></div>
-        <!-- Fallback to plain text -->
-        <pre v-else-if="emailBody?.text" class="plain-content">{{ emailBody.text }}</pre>
-        <!-- No content -->
-        <div v-else class="empty-content">
-          <Mail :size="48" :stroke-width="1" />
-          <p>No content available</p>
+    <ScrollArea class="flex-1">
+      <div class="p-6">
+        <div v-if="loading" class="flex flex-col items-center gap-2 text-sm text-muted-foreground">
+          <div class="h-5 w-5 animate-spin rounded-full border-2 border-muted-foreground/30 border-t-muted-foreground"></div>
+          Loading email...
+        </div>
+        <div v-else-if="error" class="rounded-md border border-destructive/20 bg-destructive/5 p-4 text-sm text-destructive">
+          <div class="flex items-center gap-2">
+            <Mail :size="20" />
+            <span>Failed to load email</span>
+          </div>
+          <div class="mt-2 text-xs text-destructive/80">{{ error }}</div>
+        </div>
+        <div v-else>
+          <div
+            v-if="emailBody?.html"
+            class="text-sm leading-relaxed text-foreground [&_a]:text-primary [&_a]:underline [&_p]:mb-3"
+            v-html="emailBody.html"
+          ></div>
+          <pre v-else-if="emailBody?.text" class="whitespace-pre-wrap text-sm text-foreground">
+{{ emailBody.text }}
+          </pre>
+          <div v-else class="flex flex-col items-center gap-2 text-sm text-muted-foreground">
+            <Mail :size="32" />
+            No content available
+          </div>
         </div>
       </div>
-    </div>
+    </ScrollArea>
   </div>
 </template>
-
-<style scoped>
-.email-detail-page {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  overflow: hidden;
-}
-
-.detail-header {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  padding: 16px 20px;
-  border-bottom: 1px solid var(--separator-color);
-  background: var(--surface-tertiary);
-  flex-shrink: 0;
-}
-
-.back-button {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 12px;
-  border: none;
-  border-radius: 6px;
-  background: var(--control-bg);
-  color: var(--text-secondary);
-  font-size: 13px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all 0.15s ease;
-  align-self: flex-start;
-}
-
-.back-button:hover {
-  background: var(--control-hover);
-  color: var(--text-color);
-}
-
-.header-content {
-  flex: 1;
-  min-width: 0;
-}
-
-.subject {
-  font-size: 17px;
-  font-weight: 600;
-  color: var(--text-color);
-  margin: 0 0 8px;
-  word-wrap: break-word;
-}
-
-.metadata {
-  display: flex;
-  gap: 12px;
-  align-items: baseline;
-  margin-bottom: 8px;
-}
-
-.sender {
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--text-color);
-}
-
-.date {
-  font-size: 12px;
-  color: var(--text-tertiary);
-}
-
-.filter-tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 8px;
-}
-
-.filter-tag {
-  display: inline-flex;
-  align-items: center;
-  padding: 3px 10px;
-  border-radius: 10px;
-  background: var(--tag-bg);
-  color: var(--tag-color);
-  font-size: 11px;
-  font-weight: 600;
-}
-
-.detail-body {
-  flex: 1;
-  overflow-y: auto;
-  padding: 24px;
-  background: var(--surface-primary);
-}
-
-.loading-state,
-.error-state {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 16px;
-  padding: 48px 24px;
-  text-align: center;
-  color: var(--text-secondary);
-}
-
-.loading-spinner {
-  width: 32px;
-  height: 32px;
-  border: 3px solid var(--border-color);
-  border-top-color: var(--accent-color);
-  border-radius: 50%;
-  animation: spin 0.8s linear infinite;
-}
-
-@keyframes spin {
-  to { transform: rotate(360deg); }
-}
-
-.error-state {
-  color: var(--text-tertiary);
-}
-
-.error-title {
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--text-color);
-  margin: 0;
-}
-
-.error-message {
-  font-size: 13px;
-  color: var(--danger-color);
-  margin: 4px 0 0;
-}
-
-.body-content {
-  font-size: 14px;
-  line-height: 1.6;
-  color: var(--text-color);
-}
-
-/* HTML email rendering */
-.html-content {
-  background: white;
-  padding: 20px;
-  border-radius: 8px;
-  border: 1px solid var(--separator-color);
-  overflow-x: auto;
-}
-
-.html-content :deep(*) {
-  max-width: 100%;
-}
-
-.html-content :deep(img) {
-  max-width: 100%;
-  height: auto;
-}
-
-.html-content :deep(table) {
-  border-collapse: collapse;
-  max-width: 100%;
-}
-
-.html-content :deep(a) {
-  color: var(--accent-color);
-  text-decoration: none;
-}
-
-.html-content :deep(a:hover) {
-  text-decoration: underline;
-}
-
-@media (prefers-color-scheme: dark) {
-  .html-content {
-    background: var(--surface-secondary);
-  }
-}
-
-/* Plain text fallback */
-.plain-content {
-  margin: 0;
-  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Mono",
-    "Helvetica Neue", Helvetica, Arial, sans-serif;
-  white-space: pre-wrap;
-  word-wrap: break-word;
-  padding: 20px;
-  background: var(--surface-secondary);
-  border-radius: 8px;
-  border: 1px solid var(--separator-color);
-}
-</style>

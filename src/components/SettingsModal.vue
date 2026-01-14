@@ -1,6 +1,10 @@
 <script setup lang="ts">
 import { ref, computed, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
+import Button from "./ui/button.vue";
+import Input from "./ui/input.vue";
+import Badge from "./ui/badge.vue";
+
 const props = defineProps<{
   show: boolean;
   currentGmailEmail: string | null;
@@ -38,6 +42,15 @@ watch(
   (visible) => {
     if (visible) {
       checkGmailConfigured();
+    }
+  }
+);
+
+watch(
+  () => props.currentGmailEmail,
+  (value) => {
+    if (value !== gmailEmail.value) {
+      gmailEmail.value = value || "";
     }
   }
 );
@@ -92,7 +105,7 @@ async function handleSave() {
 
 async function removeGmailAccount() {
   if (!gmailEmail.value) return;
-  
+
   try {
     await invoke("gmail_delete_credentials", { email: gmailEmail.value });
     isConfigured.value = false;
@@ -106,301 +119,84 @@ async function removeGmailAccount() {
 
 <template>
   <Teleport to="body">
-    <div v-if="show" class="modal-overlay" @click.self="emit('close')">
-      <div class="modal">
-        <div class="modal-header">
-          <h2>Email Settings</h2>
-          <button class="close-btn" @click="emit('close')">×</button>
+    <div
+      v-if="show"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm"
+      @click.self="emit('close')"
+    >
+      <div class="w-full max-w-md overflow-hidden rounded-lg border bg-card shadow-xl">
+        <div class="flex items-center justify-between border-b px-5 py-4">
+          <h2 class="text-sm font-semibold">Email Settings</h2>
+          <Button variant="ghost" size="icon" @click="emit('close')" aria-label="Close">
+            ×
+          </Button>
         </div>
 
-        <div class="modal-body">
-          <!-- Gmail Configuration -->
-          <div class="section">
-            <label class="section-label">Gmail Account</label>
+        <div class="space-y-5 px-5 py-4">
+          <div class="space-y-2">
+            <label class="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              Gmail Account
+            </label>
+            <Input
+              v-model="gmailEmail"
+              type="email"
+              placeholder="you@gmail.com"
+              @blur="checkGmailConfigured"
+            />
+          </div>
 
-            <div class="form-group">
-              <label>Email Address</label>
-              <input
-                v-model="gmailEmail"
-                type="email"
-                placeholder="you@gmail.com"
-                @blur="checkGmailConfigured"
-              />
-            </div>
+          <div v-if="isConfigured" class="flex items-center gap-2 rounded-md border bg-muted/40 px-3 py-2">
+            <Badge variant="secondary">Configured</Badge>
+            <span class="text-xs text-muted-foreground">Password stored in Keychain</span>
+            <Button variant="ghost" size="sm" class="ml-auto" @click="removeGmailAccount">
+              Remove
+            </Button>
+          </div>
 
-            <div v-if="isConfigured" class="configured-badge">
-              ✓ Account configured (password in Keychain)
-              <button class="link-btn danger" @click="removeGmailAccount">
-                Remove
-              </button>
-            </div>
-
-            <div v-if="!isConfigured" class="form-group">
-              <label>
-                App Password
-                <a
-                  href="https://myaccount.google.com/apppasswords"
-                  target="_blank"
-                  class="help-link"
-                >
-                  Generate one →
-                </a>
-              </label>
-              <input
-                v-model="gmailAppPassword"
-                type="password"
-                placeholder="16-character app password"
-                maxlength="19"
-              />
-              <div class="help-text">
-                Requires 2-Step Verification. Not your regular password.
-              </div>
-            </div>
-
-            <!-- Test Connection -->
-            <div v-if="!isConfigured && gmailEmail && gmailAppPassword" class="form-group">
-              <button
-                class="btn secondary"
-                :disabled="testing"
-                @click="testConnection"
+          <div v-if="!isConfigured" class="space-y-2">
+            <label class="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              App Password
+            </label>
+            <Input
+              v-model="gmailAppPassword"
+              type="password"
+              placeholder="16-character app password"
+              maxlength="19"
+            />
+            <div class="text-xs text-muted-foreground">
+              Requires 2-Step Verification.
+              <a
+                class="text-primary underline-offset-4 hover:underline"
+                href="https://myaccount.google.com/apppasswords"
+                target="_blank"
               >
-                {{ testing ? "Testing..." : "Test Connection" }}
-              </button>
+                Generate one
+              </a>
             </div>
+          </div>
 
-            <!-- Result -->
-            <div v-if="testResult" class="test-result" :class="{ success: testResult.success, error: !testResult.success }">
-              {{ testResult.message }}
-            </div>
+          <div v-if="!isConfigured && gmailEmail && gmailAppPassword" class="flex items-center gap-2">
+            <Button variant="outline" size="sm" :disabled="testing" @click="testConnection">
+              {{ testing ? "Testing..." : "Test Connection" }}
+            </Button>
+          </div>
+
+          <div
+            v-if="testResult"
+            class="rounded-md border px-3 py-2 text-xs"
+            :class="testResult.success ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-destructive/30 bg-destructive/5 text-destructive'"
+          >
+            {{ testResult.message }}
           </div>
         </div>
 
-        <div class="modal-footer">
-          <button class="btn secondary" @click="emit('close')">Cancel</button>
-          <button
-            class="btn primary"
-            :disabled="!canSave || saving"
-            @click="handleSave"
-          >
+        <div class="flex justify-end gap-2 border-t px-5 py-4">
+          <Button variant="outline" @click="emit('close')">Cancel</Button>
+          <Button :disabled="!canSave || saving" @click="handleSave">
             {{ saving ? "Saving..." : "Save" }}
-          </button>
+          </Button>
         </div>
       </div>
     </div>
   </Teleport>
 </template>
-
-<style scoped>
-.modal-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.4);
-  backdrop-filter: blur(4px);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 1000;
-}
-
-.modal {
-  width: 480px;
-  max-width: 90vw;
-  max-height: 85vh;
-  background: var(--surface-primary);
-  border-radius: 12px;
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-
-.modal-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 16px 20px;
-  border-bottom: 1px solid var(--separator-color);
-}
-
-.modal-header h2 {
-  margin: 0;
-  font-size: 16px;
-  font-weight: 600;
-}
-
-.close-btn {
-  background: none;
-  border: none;
-  font-size: 20px;
-  color: var(--text-tertiary);
-  cursor: pointer;
-  padding: 4px 8px;
-  border-radius: 4px;
-}
-
-.close-btn:hover {
-  background: var(--surface-hover);
-  color: var(--text-color);
-}
-
-.modal-body {
-  flex: 1;
-  overflow-y: auto;
-  padding: 20px;
-}
-
-.section {
-  margin-bottom: 24px;
-}
-
-.section-label {
-  display: block;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text-tertiary);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  margin-bottom: 12px;
-}
-
-.form-group {
-  margin-bottom: 16px;
-}
-
-.form-group label {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--text-secondary);
-  margin-bottom: 6px;
-}
-
-.form-group input {
-  width: 100%;
-  padding: 10px 12px;
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
-  background: var(--surface-tertiary);
-  color: var(--text-color);
-  font-size: 14px;
-}
-
-.form-group input:focus {
-  outline: none;
-  border-color: var(--accent-color);
-  box-shadow: 0 0 0 3px var(--accent-light);
-}
-
-.help-link {
-  font-size: 12px;
-  color: var(--accent-color);
-  text-decoration: none;
-}
-
-.help-link:hover {
-  text-decoration: underline;
-}
-
-.help-text {
-  font-size: 11px;
-  color: var(--text-tertiary);
-  margin-top: 6px;
-}
-
-.configured-badge {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 12px 16px;
-  background: var(--success-light);
-  color: var(--success-color);
-  border-radius: 8px;
-  font-size: 13px;
-  font-weight: 500;
-  margin-bottom: 16px;
-}
-
-.link-btn {
-  background: none;
-  border: none;
-  font-size: 12px;
-  cursor: pointer;
-  padding: 4px 8px;
-  border-radius: 4px;
-  margin-left: auto;
-}
-
-.link-btn.danger {
-  color: var(--danger-color);
-}
-
-.link-btn:hover {
-  background: var(--surface-hover);
-}
-
-.test-result {
-  padding: 12px 16px;
-  border-radius: 8px;
-  font-size: 13px;
-  margin-top: 12px;
-}
-
-.test-result.success {
-  background: var(--success-light);
-  color: var(--success-color);
-}
-
-.test-result.error {
-  background: var(--danger-bg);
-  color: var(--danger-color);
-}
-
-.modal-footer {
-  display: flex;
-  justify-content: flex-end;
-  gap: 10px;
-  padding: 16px 20px;
-  border-top: 1px solid var(--separator-color);
-}
-
-.btn {
-  padding: 8px 20px;
-  border-radius: 8px;
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all 0.15s ease;
-}
-
-.btn.primary {
-  background: var(--accent-color);
-  color: white;
-  border: none;
-}
-
-.btn.primary:hover:not(:disabled) {
-  filter: brightness(1.1);
-}
-
-.btn.primary:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.btn.secondary {
-  background: var(--control-bg);
-  color: var(--text-color);
-  border: 1px solid var(--border-color);
-}
-
-.btn.secondary:hover:not(:disabled) {
-  background: var(--control-hover);
-}
-
-.btn.secondary:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-</style>
