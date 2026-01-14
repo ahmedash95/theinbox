@@ -1,19 +1,33 @@
 mod filters;
 mod gmail;
+mod storage;
 
-use filters::{load_filters, save_filters, FilterConfig, FilterPattern};
+use filters::FilterPattern;
+use std::sync::Arc;
+use tauri::AppHandle;
 use tauri::Manager;
+use tauri::State;
 
-#[tauri::command]
-fn get_filters() -> Result<Vec<FilterPattern>, String> {
-    let config = load_filters()?;
-    Ok(config.patterns)
+struct AppState {
+    storage: Arc<dyn storage::Storage>,
+}
+
+#[derive(serde::Serialize, Clone)]
+struct SyncProgress {
+    stage: String,
+    processed: usize,
+    total: usize,
+    message: Option<String>,
 }
 
 #[tauri::command]
-fn save_filter_patterns(patterns: Vec<FilterPattern>) -> Result<(), String> {
-    let config = FilterConfig { patterns };
-    save_filters(&config)
+fn get_filters(state: State<AppState>) -> Result<Vec<FilterPattern>, String> {
+    state.storage.get_filters()
+}
+
+#[tauri::command]
+fn save_filter_patterns(state: State<AppState>, patterns: Vec<FilterPattern>) -> Result<(), String> {
+    state.storage.save_filters(&patterns)
 }
 
 // =============================================================================
@@ -52,18 +66,111 @@ async fn gmail_delete_credentials(email: String) -> Result<(), String> {
 
 /// Fetch unread emails from Gmail via IMAP
 #[tauri::command]
-async fn gmail_fetch_unread(email: String) -> Result<Vec<gmail::GmailEmail>, String> {
-    tokio::task::spawn_blocking(move || gmail::fetch_unread_emails(&email))
-        .await
-        .map_err(|e| format!("Task error: {}", e))?
+async fn gmail_fetch_unread(
+    state: State<'_, AppState>,
+    email: String,
+) -> Result<Vec<gmail::GmailEmail>, String> {
+    let storage = state.storage.clone();
+    tokio::task::spawn_blocking(move || {
+        let emails = gmail::fetch_unread_emails(&email)?;
+        storage.upsert_emails(&email, "INBOX", &emails, false)?;
+        Ok(emails)
+    })
+    .await
+    .map_err(|e| format!("Task error: {}", e))?
 }
 
 /// Mark Gmail emails as read (batch operation)
 #[tauri::command]
-async fn gmail_mark_as_read(email: String, uids: Vec<u32>) -> Result<usize, String> {
-    tokio::task::spawn_blocking(move || gmail::mark_emails_as_read(&email, uids))
-        .await
-        .map_err(|e| format!("Task error: {}", e))?
+async fn gmail_mark_as_read(
+    state: State<'_, AppState>,
+    email: String,
+    uids: Vec<u32>,
+) -> Result<usize, String> {
+    let storage = state.storage.clone();
+    tokio::task::spawn_blocking(move || {
+        let count = gmail::mark_emails_as_read(&email, uids.clone())?;
+        storage.mark_emails_read(&email, &uids)?;
+        Ok(count)
+    })
+    .await
+    .map_err(|e| format!("Task error: {}", e))?
+}
+
+/// Run IMAP fetch in the background and emit progress events.
+#[tauri::command]
+async fn gmail_sync_unread_background(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    email: String,
+) -> Result<(), String> {
+    let storage = state.storage.clone();
+    let handle = app.clone();
+    tokio::spawn(async move {
+        let _ = handle.emit_all(
+            "imap_sync_progress",
+            SyncProgress {
+                stage: "start".to_string(),
+                processed: 0,
+                total: 0,
+                message: None,
+            },
+        );
+
+        let result = tokio::task::spawn_blocking(move || {
+            let emails = gmail::fetch_unread_emails(&email)?;
+            storage.upsert_emails(&email, "INBOX", &emails, false)?;
+            Ok::<usize, String>(emails.len())
+        })
+        .await;
+
+        match result {
+            Ok(Ok(count)) => {
+                let _ = handle.emit_all(
+                    "imap_sync_progress",
+                    SyncProgress {
+                        stage: "complete".to_string(),
+                        processed: count,
+                        total: count,
+                        message: None,
+                    },
+                );
+            }
+            Ok(Err(err)) => {
+                let _ = handle.emit_all(
+                    "imap_sync_progress",
+                    SyncProgress {
+                        stage: "error".to_string(),
+                        processed: 0,
+                        total: 0,
+                        message: Some(err),
+                    },
+                );
+            }
+            Err(err) => {
+                let _ = handle.emit_all(
+                    "imap_sync_progress",
+                    SyncProgress {
+                        stage: "error".to_string(),
+                        processed: 0,
+                        total: 0,
+                        message: Some(format!("Task error: {}", err)),
+                    },
+                );
+            }
+        }
+    });
+
+    Ok(())
+}
+
+/// List cached emails from SQLite
+#[tauri::command]
+fn gmail_list_cached_unread(
+    state: State<AppState>,
+    email: String,
+) -> Result<Vec<storage::StoredEmail>, String> {
+    state.storage.list_emails(&email, true)
 }
 
 /// Fetch Gmail email body by UID
@@ -88,9 +195,17 @@ pub fn run() {
             gmail_delete_credentials,
             gmail_fetch_unread,
             gmail_mark_as_read,
-            gmail_fetch_body
+            gmail_fetch_body,
+            gmail_sync_unread_background,
+            gmail_list_cached_unread
         ])
         .setup(|app| {
+            let storage = storage::SqliteStorage::new().map_err(|e| {
+                std::io::Error::new(std::io::ErrorKind::Other, format!("Storage init failed: {}", e))
+            })?;
+            app.manage(AppState {
+                storage: Arc::new(storage),
+            });
             let window = app.get_webview_window("main").unwrap();
 
             #[cfg(target_os = "macos")]
