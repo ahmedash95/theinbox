@@ -1,6 +1,6 @@
 [package]
 name = "inboxcleanup"
-version = "0.1.0"
+version = "0.1.1"
 description = "A macOS app to filter and bulk-mark emails as read"
 authors = ["you"]
 edition = "2021"

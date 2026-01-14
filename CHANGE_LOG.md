@@ -1,5 +1,8 @@
 # Change Log
 
+## 0.1.1
+- Test release for verifying auto-update download functionality.
+
 ## 0.1.0
 - Initial release.
 - Gmail IMAP integration with app passwords.
