@@ -4,8 +4,10 @@ export interface Email {
   subject: string;
   sender: string;
   date_received: string;
+  date_epoch: number;
   mailbox: string;
   account: string;
+  is_read: boolean;
 }
 
 export interface EmailWithMatches extends Email {
@@ -35,6 +37,8 @@ export interface GmailEmail {
   subject: string;
   sender: string;
   date: string;
+  date_epoch: number;
+  is_read: boolean;
 }
 
 export interface StoredEmail {
@@ -50,6 +54,7 @@ export interface StoredEmail {
 
 export interface AppSettings {
   gmail_email: string | null;
+  refresh_interval_minutes?: number;
 }
 
 export interface EmailBody {

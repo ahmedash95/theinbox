@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted } from "vue";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, isTauri } from "@tauri-apps/api/core";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { Database, Mail } from "lucide-vue-next";
 import Button from "./ui/button.vue";
@@ -10,20 +10,21 @@ import Badge from "./ui/badge.vue";
 const props = defineProps<{
   show: boolean;
   currentGmailEmail: string | null;
+  currentRefreshIntervalMinutes: number;
 }>();
 
 const emit = defineEmits<{
   close: [];
-  save: [gmailEmail: string];
+  save: [payload: { gmailEmail: string; refreshIntervalMinutes: number }];
 }>();
 
 const gmailEmail = ref(props.currentGmailEmail || "");
 const gmailAppPassword = ref("");
 const testing = ref(false);
-const saving = ref(false);
 const testResult = ref<{ success: boolean; message: string } | null>(null);
 const isConfigured = ref(false);
 const activeTab = ref<"account" | "storage">("account");
+const refreshIntervalMinutes = ref(props.currentRefreshIntervalMinutes);
 let removeKeyListener: (() => void) | null = null;
 
 // Check if Gmail is already configured when email changes
@@ -47,6 +48,7 @@ watch(
     if (visible) {
       checkGmailConfigured();
       activeTab.value = "account";
+      refreshIntervalMinutes.value = props.currentRefreshIntervalMinutes;
     }
   }
 );
@@ -60,10 +62,17 @@ watch(
   }
 );
 
+watch(
+  () => props.currentRefreshIntervalMinutes,
+  (value) => {
+    refreshIntervalMinutes.value = value;
+  }
+);
+
 onMounted(() => {
   const handler = (event: KeyboardEvent) => {
     if (event.key === "Escape" && props.show) {
-      emit("close");
+      handleClose();
     }
   };
   window.addEventListener("keydown", handler);
@@ -86,6 +95,7 @@ const canSave = computed(() => {
 
 async function testConnection() {
   if (!gmailEmail.value || !gmailAppPassword.value) return;
+  if (!isTauri()) return;
 
   testing.value = true;
   testResult.value = null;
@@ -103,30 +113,37 @@ async function testConnection() {
   }
 }
 
-async function handleSave() {
-  if (!canSave.value) return;
+async function persistSettings() {
+  const nextEmail = canSave.value
+    ? gmailEmail.value
+    : props.currentGmailEmail || "";
+  const nextInterval = refreshIntervalMinutes.value;
 
-  saving.value = true;
-
-  try {
-    if (gmailAppPassword.value) {
-      // Store credentials in keychain
-      await invoke("gmail_store_credentials", {
-        email: gmailEmail.value,
-        appPassword: gmailAppPassword.value,
-      });
+  if (canSave.value) {
+    if (!isTauri()) {
+      emit("save", { gmailEmail: nextEmail, refreshIntervalMinutes: nextInterval });
+      return true;
     }
-
-    emit("save", gmailEmail.value);
-  } catch (e) {
-    testResult.value = { success: false, message: String(e) };
-  } finally {
-    saving.value = false;
+    try {
+      if (gmailAppPassword.value) {
+        await invoke("gmail_store_credentials", {
+          email: gmailEmail.value,
+          appPassword: gmailAppPassword.value,
+        });
+      }
+    } catch (e) {
+      testResult.value = { success: false, message: String(e) };
+      return false;
+    }
   }
+
+  emit("save", { gmailEmail: nextEmail, refreshIntervalMinutes: nextInterval });
+  return true;
 }
 
 async function removeGmailAccount() {
   if (!gmailEmail.value) return;
+  if (!isTauri()) return;
 
   try {
     await invoke("gmail_delete_credentials", { email: gmailEmail.value });
@@ -140,10 +157,18 @@ async function removeGmailAccount() {
 
 async function openDatabaseFolder() {
   try {
+    if (!isTauri()) return;
     const filePath = await invoke<string>("get_db_file_path");
     await revealItemInDir(filePath);
   } catch (e) {
     testResult.value = { success: false, message: String(e) };
+  }
+}
+
+async function handleClose() {
+  const saved = await persistSettings();
+  if (saved) {
+    emit("close");
   }
 }
 </script>
@@ -153,7 +178,7 @@ async function openDatabaseFolder() {
     <div
       v-if="show"
       class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm"
-      @click.self="emit('close')"
+      @click.self="handleClose"
     >
       <div class="flex h-[500px] w-[500px] flex-col overflow-hidden rounded-lg border bg-card shadow-xl">
         <div class="px-5 py-4">
@@ -229,6 +254,22 @@ async function openDatabaseFolder() {
                 </div>
               </div>
 
+              <div class="space-y-2">
+                <label class="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  Refresh Interval
+                </label>
+                <select
+                  v-model.number="refreshIntervalMinutes"
+                  class="w-full rounded-md border bg-background px-3 py-2 text-sm"
+                >
+                  <option :value="1">Every 1 minute</option>
+                  <option :value="5">Every 5 minutes</option>
+                  <option :value="15">Every 15 minutes</option>
+                  <option :value="30">Every 30 minutes</option>
+                  <option :value="60">Every 60 minutes</option>
+                </select>
+              </div>
+
               <div v-if="!isConfigured && gmailEmail && gmailAppPassword" class="flex items-center gap-2">
                 <Button variant="outline" size="sm" :disabled="testing" @click="testConnection">
                   {{ testing ? "Testing..." : "Test Connection" }}
@@ -266,7 +307,7 @@ async function openDatabaseFolder() {
         </div>
 
         <div class="flex justify-end border-t px-5 py-4">
-          <Button variant="outline" @click="emit('close')">Close</Button>
+          <Button variant="outline" @click="handleClose">Close</Button>
         </div>
       </div>
     </div>

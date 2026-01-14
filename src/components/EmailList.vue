@@ -13,6 +13,10 @@ const props = defineProps<{
   marking: boolean;
   markingCount: number;
   selectedIds: Set<string>;
+  page: number;
+  pageCount: number;
+  canPrev: boolean;
+  canNext: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -21,6 +25,8 @@ const emit = defineEmits<{
   (e: "deselect-all"): void;
   (e: "mark-read"): void;
   (e: "view-email", email: EmailWithMatches): void;
+  (e: "prev-page"): void;
+  (e: "next-page"): void;
 }>();
 
 const allSelected = computed(() => {
@@ -154,5 +160,17 @@ function formatDate(dateStr: string): string {
         </p>
       </div>
     </ScrollArea>
+
+    <div class="flex items-center justify-between border-t px-4 py-2 text-xs text-muted-foreground">
+      <span>Page {{ page }} of {{ pageCount }}</span>
+      <div class="flex items-center gap-2">
+        <Button variant="ghost" size="sm" :disabled="!canPrev" @click="emit('prev-page')">
+          Prev
+        </Button>
+        <Button variant="ghost" size="sm" :disabled="!canNext" @click="emit('next-page')">
+          Next
+        </Button>
+      </div>
+    </div>
   </div>
 </template>
