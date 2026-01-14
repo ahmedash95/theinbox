@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { ref, onMounted, watch, nextTick, computed } from "vue";
+import { ref, onMounted, onUnmounted, watch, nextTick, computed } from "vue";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import FilterList from "./components/FilterList.vue";
 import EmailList from "./components/EmailList.vue";
@@ -8,7 +9,12 @@ import EmailDetail from "./components/EmailDetail.vue";
 import SettingsModal from "./components/SettingsModal.vue";
 import Button from "./components/ui/button.vue";
 import Badge from "./components/ui/badge.vue";
-import type { Email, FilterPattern, EmailWithMatches, GmailEmail } from "./types";
+import type {
+  Email,
+  FilterPattern,
+  EmailWithMatches,
+  StoredEmail,
+} from "./types";
 
 // Settings state
 const showSettings = ref(false);
@@ -38,7 +44,7 @@ function saveSettings(newGmailEmail: string) {
   );
   showSettings.value = false;
   // Refresh emails with updated Gmail settings
-  refreshEmails();
+  refreshEmails({ showLoading: true });
 }
 
 // Window drag functionality
@@ -65,6 +71,16 @@ const marking = ref(false);
 const markingCount = ref(0);
 const error = ref<string | null>(null);
 const viewingEmail = ref<EmailWithMatches | null>(null);
+const syncStatus = ref<"idle" | "syncing" | "success" | "error">("idle");
+const syncMessage = ref<string | null>(null);
+let syncStatusTimeout: number | null = null;
+
+type SyncProgress = {
+  stage: "start" | "complete" | "error";
+  processed: number;
+  total: number;
+  message?: string | null;
+};
 
 
 // Helper to check if email matches a filter
@@ -108,10 +124,10 @@ const filtersToApply = computed(() => {
   return filters.value.filter((f) => f.enabled);
 });
 
-// Computed: emails with matching filter names
+// Computed: emails with matching filter names (all filters, regardless of enabled)
 const emailsWithMatches = computed((): EmailWithMatches[] => {
   return allEmails.value.map((email) => {
-    const matchingFilters = filtersToApply.value
+    const matchingFilters = filters.value
       .filter((filter) => emailMatchesFilter(email, filter))
       .map((f) => f.name);
 
@@ -127,7 +143,9 @@ const displayedEmails = computed((): EmailWithMatches[] => {
   if (filtersToApply.value.length === 0) {
     return emailsWithMatches.value;
   }
-  return emailsWithMatches.value.filter((e) => e.matchingFilters.length > 0);
+  return emailsWithMatches.value.filter((email) =>
+    filtersToApply.value.some((filter) => emailMatchesFilter(email, filter))
+  );
 });
 
 // Load filters and emails on mount - but don't block UI
@@ -141,7 +159,53 @@ onMounted(async () => {
     showSettings.value = true;
     loading.value = false;
   } else {
-    await refreshEmails();
+    await refreshEmails({ showLoading: true });
+  }
+});
+
+let unlistenSync: null | (() => void) = null;
+onMounted(async () => {
+  unlistenSync = await listen<SyncProgress>("imap_sync_progress", (event) => {
+    const payload = event.payload;
+    if (payload.stage === "start") {
+      syncMessage.value = null;
+      syncStatus.value = "syncing";
+      error.value = null;
+      if (syncStatusTimeout) {
+        window.clearTimeout(syncStatusTimeout);
+        syncStatusTimeout = null;
+      }
+      return;
+    }
+
+    if (payload.stage === "complete") {
+      syncStatus.value = "success";
+      syncMessage.value = null;
+      loadCachedEmails({ keepExistingOnError: true });
+      if (syncStatusTimeout) {
+        window.clearTimeout(syncStatusTimeout);
+      }
+      syncStatusTimeout = window.setTimeout(() => {
+        syncStatus.value = "idle";
+        syncStatusTimeout = null;
+      }, 2000);
+      return;
+    }
+
+    syncStatus.value = "error";
+    syncMessage.value = payload.message ?? "Sync failed.";
+    error.value = syncMessage.value;
+  });
+});
+
+onUnmounted(() => {
+  if (unlistenSync) {
+    unlistenSync();
+    unlistenSync = null;
+  }
+  if (syncStatusTimeout) {
+    window.clearTimeout(syncStatusTimeout);
+    syncStatusTimeout = null;
   }
 });
 
@@ -175,75 +239,74 @@ async function saveFilters(newFilters: FilterPattern[]) {
   }
 }
 
-async function refreshEmails() {
-  if (!gmailEmail.value) {
-    showSettings.value = true;
-    return;
+async function loadCachedEmails(options?: {
+  showLoading?: boolean;
+  keepExistingOnError?: boolean;
+}) {
+  if (!gmailEmail.value) return;
+  const showLoading = options?.showLoading ?? false;
+  const keepExistingOnError = options?.keepExistingOnError ?? false;
+
+  if (showLoading) {
+    loading.value = true;
   }
 
-  console.log("[UI] Refreshing emails via Gmail");
-  loading.value = true;
-  error.value = null;
-  selectedIds.value = new Set();
-
   try {
-    // Fetch from Gmail via IMAP
-    const gmailEmails = await invoke<GmailEmail[]>("gmail_fetch_unread", {
+    const cachedEmails = await invoke<StoredEmail[]>("gmail_list_cached_unread", {
       email: gmailEmail.value,
     });
-    // Convert GmailEmail to Email format
-    allEmails.value = gmailEmails.map((e) => ({
-      id: e.uid.toString(),
-      message_id: e.message_id,
-      subject: e.subject,
-      sender: e.sender,
-      date_received: e.date,
-      mailbox: "INBOX",
-      account: gmailEmail.value!,
+    allEmails.value = cachedEmails.map((email) => ({
+      id: email.uid.toString(),
+      message_id: email.message_id,
+      subject: email.subject,
+      sender: email.sender,
+      date_received: email.date,
+      mailbox: email.mailbox,
+      account: email.account,
     }));
-    console.log("[UI] Got", allEmails.value.length, "unread Gmail emails");
+    console.log("[UI] Loaded", allEmails.value.length, "cached emails");
   } catch (e) {
-    console.error("Failed to fetch emails:", e);
+    console.error("Failed to load cached emails:", e);
     error.value = String(e);
-    allEmails.value = [];
+    if (!keepExistingOnError) {
+      allEmails.value = [];
+    }
   } finally {
-    loading.value = false;
+    if (showLoading) {
+      loading.value = false;
+    }
   }
 }
 
-async function forceRefresh() {
+async function startBackgroundSync() {
+  if (!gmailEmail.value) return;
+  try {
+    await invoke("gmail_sync_unread_background", {
+      email: gmailEmail.value,
+    });
+  } catch (e) {
+    console.error("Failed to start background sync:", e);
+    syncStatus.value = "error";
+    syncMessage.value = String(e);
+    error.value = syncMessage.value;
+  }
+}
+
+async function refreshEmails(options?: { showLoading?: boolean }) {
   if (!gmailEmail.value) {
     showSettings.value = true;
     return;
   }
 
-  console.log("[UI] Force refreshing emails via Gmail");
-  loading.value = true;
   error.value = null;
   selectedIds.value = new Set();
-
-  try {
-    // Gmail always fetches fresh (no cache)
-    const gmailEmails = await invoke<GmailEmail[]>("gmail_fetch_unread", {
-      email: gmailEmail.value,
-    });
-    allEmails.value = gmailEmails.map((e) => ({
-      id: e.uid.toString(),
-      message_id: e.message_id,
-      subject: e.subject,
-      sender: e.sender,
-      date_received: e.date,
-      mailbox: "INBOX",
-      account: gmailEmail.value!,
-    }));
-    console.log("[UI] Force refreshed", allEmails.value.length, "Gmail emails");
-  } catch (e) {
-    console.error("Failed to refresh emails:", e);
-    error.value = String(e);
-    allEmails.value = [];
-  } finally {
-    loading.value = false;
-  }
+  const showLoading = options?.showLoading ?? allEmails.value.length === 0;
+  console.log("[UI] Refreshing emails from cached list + background sync");
+  await loadCachedEmails({
+    showLoading,
+    keepExistingOnError: !showLoading,
+  });
+  await startBackgroundSync();
 }
 
 function toggleSelect(id: string) {
@@ -285,10 +348,8 @@ async function markAsRead() {
     });
     console.log(`Marked ${count} Gmail emails as read`);
 
-    // Remove marked emails from local list immediately for snappy UI
-    const markedSet = new Set(ids);
-    allEmails.value = allEmails.value.filter((e) => !markedSet.has(e.id));
     selectedIds.value = new Set();
+    await loadCachedEmails({ keepExistingOnError: true });
   } catch (e) {
     console.error("Failed to mark as read:", e);
     error.value = String(e);
@@ -305,6 +366,22 @@ function viewEmail(email: EmailWithMatches) {
 function backToList() {
   viewingEmail.value = null;
 }
+
+const syncStatusLabel = computed(() => {
+  switch (syncStatus.value) {
+    case "syncing":
+      return "Syncing...";
+    case "success":
+      return "Up to date";
+    case "error":
+      return "Sync failed";
+    default:
+      return "";
+  }
+});
+
+const totalUnreadCount = computed(() => allEmails.value.length);
+const filteredCount = computed(() => displayedEmails.value.length);
 
 // Handle browser back button
 if (typeof window !== "undefined") {
@@ -332,9 +409,37 @@ if (typeof window !== "undefined") {
       @mousedown="startDrag"
       data-tauri-drag-region
     >
-      <div class="pointer-events-none absolute left-1/2 flex -translate-x-1/2 items-center gap-3">
-        <span class="text-sm font-semibold">InboxCleanup</span>
-        <Badge v-if="gmailEmail" variant="secondary">Gmail</Badge>
+      <div class="pointer-events-none absolute left-1/2 flex w-[70%] -translate-x-1/2">
+        <div class="my-1 flex w-full items-center justify-between gap-4 rounded-full bg-muted/80 px-4 py-1.5 text-xs shadow-md">
+          <div class="flex items-center gap-2">
+            <span class="text-[13px] font-semibold">InboxCleanup</span>
+            <Badge v-if="gmailEmail" variant="secondary">Gmail</Badge>
+          </div>
+          <div class="flex items-center gap-2 text-muted-foreground">
+            <div v-if="syncStatus !== 'idle'" class="flex items-center gap-1.5">
+              <div
+                v-if="syncStatus === 'syncing'"
+                class="h-3 w-3 animate-spin rounded-full border-2 border-muted-foreground/30 border-t-muted-foreground"
+              ></div>
+              <div
+                v-else
+                class="h-2 w-2 rounded-full"
+                :class="{
+                  'bg-emerald-500': syncStatus === 'success',
+                  'bg-destructive': syncStatus === 'error',
+                }"
+              ></div>
+              <span class="text-[11px]">{{ syncStatusLabel }}</span>
+            </div>
+            <span class="text-[11px]">
+              {{ filteredCount }} shown
+            </span>
+            <span class="text-[11px]">·</span>
+            <span class="text-[11px]">
+              {{ totalUnreadCount }} unread
+            </span>
+          </div>
+        </div>
       </div>
       <Button
         variant="ghost"

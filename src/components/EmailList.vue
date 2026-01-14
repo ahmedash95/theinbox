@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from "vue";
-import { Check, Mail } from "lucide-vue-next";
+import { Check, CheckSquare, MinusSquare, Square, Mail } from "lucide-vue-next";
 import type { EmailWithMatches } from "../types";
 import Button from "./ui/button.vue";
 import Badge from "./ui/badge.vue";
@@ -80,25 +80,31 @@ function formatDate(dateStr: string): string {
       </div>
     </div>
 
-    <div class="flex items-center justify-between border-b px-4 py-2">
-      <div class="flex items-center gap-3">
-        <Checkbox
-          :checked="allSelected ? true : someSelected ? 'indeterminate' : false"
-          @update:checked="(value) => (value ? emit('select-all') : emit('deselect-all'))"
-        />
-        <span class="text-xs text-muted-foreground">{{ emails.length }} messages</span>
+    <div class="flex items-center border-b px-4 py-2">
+      <div class="flex items-center gap-2">
+        <Button
+          variant="ghost"
+          size="icon"
+          @click="allSelected ? emit('deselect-all') : emit('select-all')"
+          :disabled="emails.length === 0 || loading || marking"
+          aria-label="Toggle select all"
+          title="Select all"
+        >
+          <CheckSquare v-if="allSelected" :size="16" />
+          <MinusSquare v-else-if="someSelected" :size="16" />
+          <Square v-else :size="16" />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          @click="emit('mark-read')"
+          :disabled="selectedIds.size === 0 || loading || marking"
+          aria-label="Mark selected as read"
+          title="Mark selected as read"
+        >
+          <Check :size="16" />
+        </Button>
       </div>
-
-      <Button
-        variant="default"
-        size="sm"
-        @click="emit('mark-read')"
-        :disabled="selectedIds.size === 0 || loading || marking"
-      >
-        <Check :size="14" />
-        <span v-if="selectedIds.size > 0">Mark {{ selectedIds.size }} Read</span>
-        <span v-else>Mark Read</span>
-      </Button>
     </div>
 
     <div v-if="loading" class="flex flex-1 items-center justify-center">
@@ -123,16 +129,18 @@ function formatDate(dateStr: string): string {
           />
 
           <button class="flex min-w-0 flex-1 flex-col gap-1 text-left" @click="emit('view-email', email)">
-            <div class="flex items-center justify-between gap-4">
+            <div class="flex items-center justify-between gap-3">
               <span class="truncate text-sm font-medium">{{ email.subject || "(No Subject)" }}</span>
-              <span class="shrink-0 text-xs text-muted-foreground">{{ formatDate(email.date_received) }}</span>
+              <div class="flex items-center gap-2">
+                <div v-if="email.matchingFilters.length > 0" class="flex max-w-[140px] flex-wrap justify-end gap-1">
+                  <Badge v-for="tag in email.matchingFilters" :key="tag" variant="secondary">
+                    {{ tag }}
+                  </Badge>
+                </div>
+                <span class="shrink-0 text-xs text-muted-foreground">{{ formatDate(email.date_received) }}</span>
+              </div>
             </div>
             <span class="truncate text-xs text-muted-foreground">{{ formatSender(email.sender) }}</span>
-            <div v-if="email.matchingFilters.length > 0" class="mt-2 flex flex-wrap gap-1">
-              <Badge v-for="tag in email.matchingFilters" :key="tag" variant="secondary">
-                {{ tag }}
-              </Badge>
-            </div>
           </button>
 
         </div>

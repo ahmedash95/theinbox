@@ -37,6 +37,17 @@ export interface GmailEmail {
   date: string;
 }
 
+export interface StoredEmail {
+  uid: number;
+  message_id: string;
+  subject: string;
+  sender: string;
+  date: string;
+  mailbox: string;
+  account: string;
+  is_read: boolean;
+}
+
 export interface AppSettings {
   gmail_email: string | null;
 }

@@ -5,6 +5,7 @@ mod storage;
 use filters::FilterPattern;
 use std::sync::Arc;
 use tauri::AppHandle;
+use tauri::Emitter;
 use tauri::Manager;
 use tauri::State;
 
@@ -107,7 +108,7 @@ async fn gmail_sync_unread_background(
     let storage = state.storage.clone();
     let handle = app.clone();
     tokio::spawn(async move {
-        let _ = handle.emit_all(
+        let _ = handle.emit(
             "imap_sync_progress",
             SyncProgress {
                 stage: "start".to_string(),
@@ -126,7 +127,7 @@ async fn gmail_sync_unread_background(
 
         match result {
             Ok(Ok(count)) => {
-                let _ = handle.emit_all(
+                let _ = handle.emit(
                     "imap_sync_progress",
                     SyncProgress {
                         stage: "complete".to_string(),
@@ -137,7 +138,7 @@ async fn gmail_sync_unread_background(
                 );
             }
             Ok(Err(err)) => {
-                let _ = handle.emit_all(
+                let _ = handle.emit(
                     "imap_sync_progress",
                     SyncProgress {
                         stage: "error".to_string(),
@@ -148,7 +149,7 @@ async fn gmail_sync_unread_background(
                 );
             }
             Err(err) => {
-                let _ = handle.emit_all(
+                let _ = handle.emit(
                     "imap_sync_progress",
                     SyncProgress {
                         stage: "error".to_string(),
@@ -171,6 +172,20 @@ fn gmail_list_cached_unread(
     email: String,
 ) -> Result<Vec<storage::StoredEmail>, String> {
     state.storage.list_emails(&email, true)
+}
+
+#[tauri::command]
+fn get_db_directory() -> Result<String, String> {
+    storage::get_db_dir()
+        .map(|path| path.to_string_lossy().to_string())
+        .map_err(|e| e)
+}
+
+#[tauri::command]
+fn get_db_file_path() -> Result<String, String> {
+    storage::get_db_file_path()
+        .map(|path| path.to_string_lossy().to_string())
+        .map_err(|e| e)
 }
 
 /// Fetch Gmail email body by UID
@@ -197,7 +212,9 @@ pub fn run() {
             gmail_mark_as_read,
             gmail_fetch_body,
             gmail_sync_unread_background,
-            gmail_list_cached_unread
+            gmail_list_cached_unread,
+            get_db_directory,
+            get_db_file_path
         ])
         .setup(|app| {
             let storage = storage::SqliteStorage::new().map_err(|e| {

@@ -1,6 +1,8 @@
 <script setup lang="ts">
-import { ref, computed, watch } from "vue";
+import { ref, computed, watch, onMounted, onUnmounted } from "vue";
 import { invoke } from "@tauri-apps/api/core";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
+import { Database, Mail } from "lucide-vue-next";
 import Button from "./ui/button.vue";
 import Input from "./ui/input.vue";
 import Badge from "./ui/badge.vue";
@@ -21,6 +23,8 @@ const testing = ref(false);
 const saving = ref(false);
 const testResult = ref<{ success: boolean; message: string } | null>(null);
 const isConfigured = ref(false);
+const activeTab = ref<"account" | "storage">("account");
+let removeKeyListener: (() => void) | null = null;
 
 // Check if Gmail is already configured when email changes
 async function checkGmailConfigured() {
@@ -42,6 +46,7 @@ watch(
   (visible) => {
     if (visible) {
       checkGmailConfigured();
+      activeTab.value = "account";
     }
   }
 );
@@ -54,6 +59,23 @@ watch(
     }
   }
 );
+
+onMounted(() => {
+  const handler = (event: KeyboardEvent) => {
+    if (event.key === "Escape" && props.show) {
+      emit("close");
+    }
+  };
+  window.addEventListener("keydown", handler);
+  removeKeyListener = () => window.removeEventListener("keydown", handler);
+});
+
+onUnmounted(() => {
+  if (removeKeyListener) {
+    removeKeyListener();
+    removeKeyListener = null;
+  }
+});
 
 const canSave = computed(() => {
   return (
@@ -115,6 +137,15 @@ async function removeGmailAccount() {
     testResult.value = { success: false, message: String(e) };
   }
 }
+
+async function openDatabaseFolder() {
+  try {
+    const filePath = await invoke<string>("get_db_file_path");
+    await revealItemInDir(filePath);
+  } catch (e) {
+    testResult.value = { success: false, message: String(e) };
+  }
+}
 </script>
 
 <template>
@@ -124,62 +155,106 @@ async function removeGmailAccount() {
       class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm"
       @click.self="emit('close')"
     >
-      <div class="w-full max-w-md overflow-hidden rounded-lg border bg-card shadow-xl">
-        <div class="flex items-center justify-between border-b px-5 py-4">
-          <h2 class="text-sm font-semibold">Email Settings</h2>
-          <Button variant="ghost" size="icon" @click="emit('close')" aria-label="Close">
-            ×
-          </Button>
+      <div class="flex h-[500px] w-[500px] flex-col overflow-hidden rounded-lg border bg-card shadow-xl">
+        <div class="px-5 py-4">
+          <div class="inline-flex w-full items-center justify-center gap-2 text-xs">
+            <button
+              type="button"
+              class="flex h-14 w-28 flex-col items-center justify-center gap-1 rounded-md border font-medium transition"
+              :class="activeTab === 'account' ? 'border-transparent bg-background shadow-sm' : 'border-transparent text-muted-foreground'"
+              @click="activeTab = 'account'"
+            >
+              <Mail :size="18" />
+              Account
+            </button>
+            <button
+              type="button"
+              class="flex h-14 w-28 flex-col items-center justify-center gap-1 rounded-md border font-medium transition"
+              :class="activeTab === 'storage' ? 'border-transparent bg-background shadow-sm' : 'border-transparent text-muted-foreground'"
+              @click="activeTab = 'storage'"
+            >
+              <Database :size="18" />
+              Storage
+            </button>
+          </div>
         </div>
 
-        <div class="space-y-5 px-5 py-4">
-          <div class="space-y-2">
-            <label class="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-              Gmail Account
-            </label>
-            <Input
-              v-model="gmailEmail"
-              type="email"
-              placeholder="you@gmail.com"
-              @blur="checkGmailConfigured"
-            />
-          </div>
+        <div class="border-t"></div>
 
-          <div v-if="isConfigured" class="flex items-center gap-2 rounded-md border bg-muted/40 px-3 py-2">
-            <Badge variant="secondary">Configured</Badge>
-            <span class="text-xs text-muted-foreground">Password stored in Keychain</span>
-            <Button variant="ghost" size="sm" class="ml-auto" @click="removeGmailAccount">
-              Remove
-            </Button>
-          </div>
+        <div class="flex-1 space-y-6 overflow-auto px-5 py-4">
+          <template v-if="activeTab === 'account'">
+            <div class="space-y-3">
+              <div class="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                Gmail
+              </div>
+              <div class="space-y-2">
+                <label class="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  Gmail Account
+                </label>
+                <Input
+                  v-model="gmailEmail"
+                  type="email"
+                  placeholder="you@gmail.com"
+                  @blur="checkGmailConfigured"
+                />
+              </div>
 
-          <div v-if="!isConfigured" class="space-y-2">
-            <label class="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-              App Password
-            </label>
-            <Input
-              v-model="gmailAppPassword"
-              type="password"
-              placeholder="16-character app password"
-              maxlength="19"
-            />
-            <div class="text-xs text-muted-foreground">
-              Requires 2-Step Verification.
-              <a
-                class="text-primary underline-offset-4 hover:underline"
-                href="https://myaccount.google.com/apppasswords"
-                target="_blank"
-              >
-                Generate one
-              </a>
+              <div v-if="isConfigured" class="flex items-center gap-2 rounded-md border bg-muted/40 px-3 py-2">
+                <Badge variant="secondary">Configured</Badge>
+                <span class="text-xs text-muted-foreground">Password stored in Keychain</span>
+                <Button variant="ghost" size="sm" class="ml-auto" @click="removeGmailAccount">
+                  Remove
+                </Button>
+              </div>
+
+              <div v-if="!isConfigured" class="space-y-2">
+                <label class="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  App Password
+                </label>
+                <Input
+                  v-model="gmailAppPassword"
+                  type="password"
+                  placeholder="16-character app password"
+                  maxlength="19"
+                />
+                <div class="text-xs text-muted-foreground">
+                  Requires 2-Step Verification.
+                  <a
+                    class="text-primary underline-offset-4 hover:underline"
+                    href="https://myaccount.google.com/apppasswords"
+                    target="_blank"
+                  >
+                    Generate one
+                  </a>
+                </div>
+              </div>
+
+              <div v-if="!isConfigured && gmailEmail && gmailAppPassword" class="flex items-center gap-2">
+                <Button variant="outline" size="sm" :disabled="testing" @click="testConnection">
+                  {{ testing ? "Testing..." : "Test Connection" }}
+                </Button>
+              </div>
             </div>
-          </div>
+          </template>
 
-          <div v-if="!isConfigured && gmailEmail && gmailAppPassword" class="flex items-center gap-2">
-            <Button variant="outline" size="sm" :disabled="testing" @click="testConnection">
-              {{ testing ? "Testing..." : "Test Connection" }}
-            </Button>
-          </div>
+          <template v-else>
+            <div class="space-y-3">
+              <div class="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                Database
+              </div>
+              <div class="flex items-center justify-between rounded-md border bg-muted/40 px-3 py-2">
+                <div>
+                  <div class="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                    Local Database
+                  </div>
+                  <div class="text-xs text-muted-foreground">Open the SQLite folder in Finder.</div>
+                </div>
+                <Button variant="outline" size="sm" @click="openDatabaseFolder">
+                  Open Folder
+                </Button>
+              </div>
+            </div>
+          </template>
 
           <div
             v-if="testResult"
@@ -190,11 +265,8 @@ async function removeGmailAccount() {
           </div>
         </div>
 
-        <div class="flex justify-end gap-2 border-t px-5 py-4">
-          <Button variant="outline" @click="emit('close')">Cancel</Button>
-          <Button :disabled="!canSave || saving" @click="handleSave">
-            {{ saving ? "Saving..." : "Save" }}
-          </Button>
+        <div class="flex justify-end border-t px-5 py-4">
+          <Button variant="outline" @click="emit('close')">Close</Button>
         </div>
       </div>
     </div>
