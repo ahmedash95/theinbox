@@ -1,20 +1,16 @@
 <script setup lang="ts">
-import { ref, computed } from "vue";
+import { ref, computed, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
-import type { EmailProvider } from "../types";
-
 const props = defineProps<{
   show: boolean;
-  currentProvider: EmailProvider | null;
   currentGmailEmail: string | null;
 }>();
 
 const emit = defineEmits<{
   close: [];
-  save: [provider: EmailProvider, gmailEmail?: string];
+  save: [gmailEmail: string];
 }>();
 
-const selectedProvider = ref<EmailProvider | null>(props.currentProvider);
 const gmailEmail = ref(props.currentGmailEmail || "");
 const gmailAppPassword = ref("");
 const testing = ref(false);
@@ -37,17 +33,20 @@ async function checkGmailConfigured() {
   }
 }
 
-const canSave = computed(() => {
-  if (!selectedProvider.value) return false;
-  if (selectedProvider.value === "apple_mail") return true;
-  if (selectedProvider.value === "gmail") {
-    // Can save if already configured or has new password
-    return (
-      gmailEmail.value.includes("@") &&
-      (isConfigured.value || gmailAppPassword.value.length >= 16)
-    );
+watch(
+  () => props.show,
+  (visible) => {
+    if (visible) {
+      checkGmailConfigured();
+    }
   }
-  return false;
+);
+
+const canSave = computed(() => {
+  return (
+    gmailEmail.value.includes("@") &&
+    (isConfigured.value || gmailAppPassword.value.length >= 16)
+  );
 });
 
 async function testConnection() {
@@ -70,12 +69,12 @@ async function testConnection() {
 }
 
 async function handleSave() {
-  if (!canSave.value || !selectedProvider.value) return;
+  if (!canSave.value) return;
 
   saving.value = true;
 
   try {
-    if (selectedProvider.value === "gmail" && gmailAppPassword.value) {
+    if (gmailAppPassword.value) {
       // Store credentials in keychain
       await invoke("gmail_store_credentials", {
         email: gmailEmail.value,
@@ -83,11 +82,7 @@ async function handleSave() {
       });
     }
 
-    emit(
-      "save",
-      selectedProvider.value,
-      selectedProvider.value === "gmail" ? gmailEmail.value : undefined
-    );
+    emit("save", gmailEmail.value);
   } catch (e) {
     testResult.value = { success: false, message: String(e) };
   } finally {
@@ -119,34 +114,8 @@ async function removeGmailAccount() {
         </div>
 
         <div class="modal-body">
-          <!-- Provider Selection -->
-          <div class="section">
-            <label class="section-label">Email Provider</label>
-            <div class="provider-cards">
-              <button
-                class="provider-card"
-                :class="{ active: selectedProvider === 'apple_mail' }"
-                @click="selectedProvider = 'apple_mail'"
-              >
-                <div class="provider-icon">📮</div>
-                <div class="provider-name">Apple Mail</div>
-                <div class="provider-desc">Local mailboxes via Mail.app</div>
-              </button>
-
-              <button
-                class="provider-card"
-                :class="{ active: selectedProvider === 'gmail' }"
-                @click="selectedProvider = 'gmail'"
-              >
-                <div class="provider-icon">📧</div>
-                <div class="provider-name">Gmail</div>
-                <div class="provider-desc">Direct IMAP connection</div>
-              </button>
-            </div>
-          </div>
-
           <!-- Gmail Configuration -->
-          <div v-if="selectedProvider === 'gmail'" class="section">
+          <div class="section">
             <label class="section-label">Gmail Account</label>
 
             <div class="form-group">
@@ -202,17 +171,6 @@ async function removeGmailAccount() {
             <!-- Result -->
             <div v-if="testResult" class="test-result" :class="{ success: testResult.success, error: !testResult.success }">
               {{ testResult.message }}
-            </div>
-          </div>
-
-          <!-- Apple Mail Info -->
-          <div v-if="selectedProvider === 'apple_mail'" class="section">
-            <div class="info-box">
-              <strong>Requirements:</strong>
-              <ul>
-                <li>Apple Mail must be set up with your accounts</li>
-                <li>For best performance, grant Full Disk Access in System Settings → Privacy</li>
-              </ul>
             </div>
           </div>
         </div>
@@ -303,52 +261,6 @@ async function removeGmailAccount() {
   text-transform: uppercase;
   letter-spacing: 0.5px;
   margin-bottom: 12px;
-}
-
-.provider-cards {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12px;
-}
-
-.provider-card {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  padding: 20px 16px;
-  border: 2px solid var(--border-color);
-  border-radius: 12px;
-  background: var(--surface-secondary);
-  cursor: pointer;
-  transition: all 0.15s ease;
-  text-align: center;
-}
-
-.provider-card:hover {
-  border-color: var(--text-tertiary);
-  background: var(--surface-hover);
-}
-
-.provider-card.active {
-  border-color: var(--accent-color);
-  background: var(--accent-light);
-}
-
-.provider-icon {
-  font-size: 32px;
-  margin-bottom: 8px;
-}
-
-.provider-name {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--text-color);
-  margin-bottom: 4px;
-}
-
-.provider-desc {
-  font-size: 11px;
-  color: var(--text-tertiary);
 }
 
 .form-group {
@@ -443,29 +355,6 @@ async function removeGmailAccount() {
 .test-result.error {
   background: var(--danger-bg);
   color: var(--danger-color);
-}
-
-.info-box {
-  padding: 16px;
-  background: var(--surface-tertiary);
-  border-radius: 8px;
-  font-size: 13px;
-  color: var(--text-secondary);
-}
-
-.info-box strong {
-  display: block;
-  margin-bottom: 8px;
-  color: var(--text-color);
-}
-
-.info-box ul {
-  margin: 0;
-  padding-left: 20px;
-}
-
-.info-box li {
-  margin-bottom: 4px;
 }
 
 .modal-footer {

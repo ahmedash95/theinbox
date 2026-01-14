@@ -6,11 +6,10 @@ import FilterList from "./components/FilterList.vue";
 import EmailList from "./components/EmailList.vue";
 import EmailDetail from "./components/EmailDetail.vue";
 import SettingsModal from "./components/SettingsModal.vue";
-import type { Email, FilterPattern, EmailWithMatches, EmailProvider, GmailEmail } from "./types";
+import type { Email, FilterPattern, EmailWithMatches, GmailEmail } from "./types";
 
 // Settings state
 const showSettings = ref(false);
-const provider = ref<EmailProvider | null>(null);
 const gmailEmail = ref<string | null>(null);
 
 // Load settings from localStorage
@@ -19,28 +18,24 @@ function loadSettings() {
   if (saved) {
     try {
       const settings = JSON.parse(saved);
-      provider.value = settings.provider || null;
       gmailEmail.value = settings.gmail_email || null;
     } catch {
-      provider.value = null;
       gmailEmail.value = null;
     }
   }
 }
 
 // Save settings to localStorage
-function saveSettings(newProvider: EmailProvider, newGmailEmail?: string) {
-  provider.value = newProvider;
+function saveSettings(newGmailEmail: string) {
   gmailEmail.value = newGmailEmail || null;
   localStorage.setItem(
     "inboxcleanup_settings",
     JSON.stringify({
-      provider: newProvider,
       gmail_email: newGmailEmail || null,
     })
   );
   showSettings.value = false;
-  // Refresh emails with new provider
+  // Refresh emails with updated Gmail settings
   refreshEmails();
 }
 
@@ -175,8 +170,8 @@ onMounted(async () => {
   loadSettings();
   await loadFilters();
   
-  // Show settings if no provider configured
-  if (!provider.value) {
+  // Show settings if Gmail is not configured
+  if (!gmailEmail.value) {
     showSettings.value = true;
     loading.value = false;
     initialLoad.value = false;
@@ -217,38 +212,32 @@ async function saveFilters(newFilters: FilterPattern[]) {
 }
 
 async function refreshEmails() {
-  if (!provider.value) {
+  if (!gmailEmail.value) {
     showSettings.value = true;
     return;
   }
 
-  console.log("[UI] Refreshing emails via", provider.value);
+  console.log("[UI] Refreshing emails via Gmail");
   loading.value = true;
   error.value = null;
   selectedIds.value = new Set();
 
   try {
-    if (provider.value === "gmail" && gmailEmail.value) {
-      // Fetch from Gmail via IMAP
-      const gmailEmails = await invoke<GmailEmail[]>("gmail_fetch_unread", {
-        email: gmailEmail.value,
-      });
-      // Convert GmailEmail to Email format
-      allEmails.value = gmailEmails.map((e) => ({
-        id: e.uid.toString(),
-        message_id: e.message_id,
-        subject: e.subject,
-        sender: e.sender,
-        date_received: e.date,
-        mailbox: "INBOX",
-        account: gmailEmail.value!,
-      }));
-      console.log("[UI] Got", allEmails.value.length, "unread Gmail emails");
-    } else {
-      // Fetch from Apple Mail (SQLite/AppleScript)
-      allEmails.value = await invoke<Email[]>("get_unread_emails", { inboxOnly: true });
-      console.log("[UI] Got", allEmails.value.length, "unread emails");
-    }
+    // Fetch from Gmail via IMAP
+    const gmailEmails = await invoke<GmailEmail[]>("gmail_fetch_unread", {
+      email: gmailEmail.value,
+    });
+    // Convert GmailEmail to Email format
+    allEmails.value = gmailEmails.map((e) => ({
+      id: e.uid.toString(),
+      message_id: e.message_id,
+      subject: e.subject,
+      sender: e.sender,
+      date_received: e.date,
+      mailbox: "INBOX",
+      account: gmailEmail.value!,
+    }));
+    console.log("[UI] Got", allEmails.value.length, "unread Gmail emails");
   } catch (e) {
     console.error("Failed to fetch emails:", e);
     error.value = String(e);
@@ -259,36 +248,31 @@ async function refreshEmails() {
 }
 
 async function forceRefresh() {
-  if (!provider.value) {
+  if (!gmailEmail.value) {
     showSettings.value = true;
     return;
   }
 
-  console.log("[UI] Force refreshing emails via", provider.value);
+  console.log("[UI] Force refreshing emails via Gmail");
   loading.value = true;
   error.value = null;
   selectedIds.value = new Set();
 
   try {
-    if (provider.value === "gmail" && gmailEmail.value) {
-      // Gmail always fetches fresh (no cache)
-      const gmailEmails = await invoke<GmailEmail[]>("gmail_fetch_unread", {
-        email: gmailEmail.value,
-      });
-      allEmails.value = gmailEmails.map((e) => ({
-        id: e.uid.toString(),
-        message_id: e.message_id,
-        subject: e.subject,
-        sender: e.sender,
-        date_received: e.date,
-        mailbox: "INBOX",
-        account: gmailEmail.value!,
-      }));
-      console.log("[UI] Force refreshed", allEmails.value.length, "Gmail emails");
-    } else {
-      allEmails.value = await invoke<Email[]>("force_refresh", { inboxOnly: true });
-      console.log("[UI] Force refreshed", allEmails.value.length, "unread emails");
-    }
+    // Gmail always fetches fresh (no cache)
+    const gmailEmails = await invoke<GmailEmail[]>("gmail_fetch_unread", {
+      email: gmailEmail.value,
+    });
+    allEmails.value = gmailEmails.map((e) => ({
+      id: e.uid.toString(),
+      message_id: e.message_id,
+      subject: e.subject,
+      sender: e.sender,
+      date_received: e.date,
+      mailbox: "INBOX",
+      account: gmailEmail.value!,
+    }));
+    console.log("[UI] Force refreshed", allEmails.value.length, "Gmail emails");
   } catch (e) {
     console.error("Failed to refresh emails:", e);
     error.value = String(e);
@@ -318,6 +302,10 @@ function deselectAll() {
 
 async function markAsRead() {
   if (selectedIds.value.size === 0) return;
+  if (!gmailEmail.value) {
+    showSettings.value = true;
+    return;
+  }
 
   marking.value = true;
   markingCount.value = selectedIds.value.size;
@@ -325,21 +313,13 @@ async function markAsRead() {
 
   try {
     const ids = Array.from(selectedIds.value);
-    let count: number;
-
-    if (provider.value === "gmail" && gmailEmail.value) {
-      // Gmail uses UIDs (numbers)
-      const uids = ids.map((id) => parseInt(id, 10));
-      count = await invoke<number>("gmail_mark_as_read", {
-        email: gmailEmail.value,
-        uids,
-      });
-      console.log(`Marked ${count} Gmail emails as read`);
-    } else {
-      // Apple Mail
-      count = await invoke<number>("mark_as_read", { emailIds: ids });
-      console.log(`Marked ${count} emails as read`);
-    }
+    // Gmail uses UIDs (numbers)
+    const uids = ids.map((id) => parseInt(id, 10));
+    const count = await invoke<number>("gmail_mark_as_read", {
+      email: gmailEmail.value,
+      uids,
+    });
+    console.log(`Marked ${count} Gmail emails as read`);
     
     // Remove marked emails from local list immediately for snappy UI
     const markedSet = new Set(ids);
@@ -383,7 +363,6 @@ if (typeof window !== 'undefined') {
     <!-- Settings Modal -->
     <SettingsModal
       :show="showSettings"
-      :current-provider="provider"
       :current-gmail-email="gmailEmail"
       @close="showSettings = false"
       @save="saveSettings"
@@ -398,7 +377,7 @@ if (typeof window !== 'undefined') {
       <div class="titlebar-traffic-lights"></div>
       <div class="titlebar-title">
         InboxCleanup
-        <span v-if="provider" class="provider-badge">{{ provider === 'gmail' ? 'Gmail' : 'Apple Mail' }}</span>
+        <span v-if="gmailEmail" class="provider-badge">Gmail</span>
       </div>
       <button class="titlebar-settings" @click="showSettings = true" data-no-drag>
         ⚙️
@@ -485,7 +464,6 @@ if (typeof window !== 'undefined') {
         <EmailDetail
           v-else
           :email="viewingEmail"
-          :provider="provider"
           :gmail-email="gmailEmail"
           @back="backToList"
         />

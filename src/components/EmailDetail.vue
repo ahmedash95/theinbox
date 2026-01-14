@@ -2,11 +2,10 @@
 import { ref, onMounted } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { ArrowLeft, Mail } from "lucide-vue-next";
-import type { EmailWithMatches, EmailProvider, EmailBody } from "../types";
+import type { EmailWithMatches, EmailBody } from "../types";
 
 const props = defineProps<{
   email: EmailWithMatches;
-  provider: EmailProvider | null;
   gmailEmail: string | null;
 }>();
 
@@ -20,17 +19,14 @@ const error = ref<string | null>(null);
 
 onMounted(async () => {
   try {
-    if (props.provider === "gmail" && props.gmailEmail) {
-      const uid = parseInt(props.email.id, 10);
-      emailBody.value = await invoke<EmailBody>("gmail_fetch_body", {
-        email: props.gmailEmail,
-        uid,
-      });
-    } else {
-      emailBody.value = await invoke<EmailBody>("get_email_body", {
-        emailId: props.email.id,
-      });
+    if (!props.gmailEmail) {
+      throw new Error("Gmail account not configured.");
     }
+    const uid = parseInt(props.email.id, 10);
+    emailBody.value = await invoke<EmailBody>("gmail_fetch_body", {
+      email: props.gmailEmail,
+      uid,
+    });
   } catch (e) {
     console.error("Failed to fetch email body:", e);
     error.value = String(e);
